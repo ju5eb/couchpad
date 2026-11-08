@@ -18,13 +18,16 @@ class ControllerHub(context: Context) {
         fun onGameSelected()
     }
 
-    val token: String = newToken()
+    private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)
+
+    /** Persisted so phones keep working when Android kills and restarts the app. */
+    val token: String = prefs.getString(KEY_TOKEN, null)
+        ?: newToken().also { prefs.edit().putString(KEY_TOKEN, it).apply() }
     val library = RomLibrary(File(context.getExternalFilesDir(null), "roms").apply { mkdirs() })
 
     @Volatile
     var listener: Listener? = null
 
-    private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)
     private val connectedPlayers = mutableSetOf<Int>()
     private val server = ControllerServer(
         port = PORT,
@@ -71,6 +74,7 @@ class ControllerHub(context: Context) {
         const val PORT = 8080
         const val MAX_PLAYERS = 2
         private const val KEY_GAME = "selected_game"
+        private const val KEY_TOKEN = "token"
         private const val TOKEN_CHARS = "abcdefghjkmnpqrstuvwxyz23456789"
     }
 }

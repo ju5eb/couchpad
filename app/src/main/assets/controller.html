@@ -101,6 +101,9 @@
   let held = new Set();         // wire codes currently pressed
   let socket = null;
   let retryMs = 500;
+  const POLICY_VIOLATION = 1008; // TV rejected the token: this page came from an old QR
+  const STALE_QR = "Old QR code. Scan the one on the TV again.";
+  let stale = false;
 
   function loadClientId() {
     try {
@@ -118,8 +121,9 @@
       if (e.data === "full") { setStatus("Game is full"); return; }
       if (e.data.startsWith("p:")) { setStatus(`Player ${e.data.slice(2)}`, true); retryMs = 500; }
     };
-    socket.onclose = () => {
+    socket.onclose = (e) => {
       releaseAll();
+      if (e.code === POLICY_VIOLATION) { stale = true; setStatus(STALE_QR); return; }
       setStatus("Reconnecting…");
       setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 5000);
@@ -174,12 +178,15 @@
   const msgEl = document.getElementById("msg");
   const fileInput = document.getElementById("file");
 
-  const api = (path, params = {}, options = {}) => {
+  const api = async (path, params = {}, options = {}) => {
     const query = new URLSearchParams({ ...params, token });
-    return fetch(`${path}?${query}`, options);
+    const response = await fetch(`${path}?${query}`, options);
+    if (response.status === 403) { stale = true; showMessage(STALE_QR); setStatus(STALE_QR); throw new Error("stale token"); }
+    return response;
   };
 
-  function showMessage(text) { msgEl.textContent = text; }
+  // Once the token is known to be stale, nothing else matters until the user rescans.
+  function showMessage(text) { msgEl.textContent = stale ? STALE_QR : text; }
 
   async function loadGames() {
     gamesEl.textContent = "";
@@ -222,7 +229,7 @@
     } catch { showMessage("Upload failed. Check the connection to the TV."); }
   }
 
-  function openMenu() { releaseAll(); showMessage(""); menu.classList.add("open"); loadGames(); }
+  function openMenu() { releaseAll(); showMessage(""); menu.classList.add("open"); if (!stale) loadGames(); }
   function closeMenu() { menu.classList.remove("open"); }
 
   document.getElementById("menuBtn").addEventListener("click", openMenu);
