@@ -10,11 +10,29 @@ Phone (browser gamepad) ──WebSocket over LAN──► TV (Ktor server) ─�
 
 ## Status
 
-**Phase 1 — controller transport (current).** The TV shows a QR and live
-button state for 2 players. No emulator yet.
+- **Phase 1 — controller transport.** QR, WebSocket, 2 players. Done.
+- **Phase 2 — emulator (current).** Snes9x runs through
+  [LibretroDroid](https://github.com/Swordfish90/LibretroDroid); each phone
+  drives its own input port. Loads the first ROM found on the device.
 
-Next: embed a libretro SNES core (Snes9x) via LibretroDroid and route
-controller events to its input ports.
+## Emulator setup
+
+The core is not committed. Fetch it (default ABI `armeabi-v7a`):
+
+```bash
+scripts/fetch-core.sh            # or: scripts/fetch-core.sh arm64-v8a
+```
+
+ROMs are read from the app's external files folder. Launch the app once so it
+creates the folder, then push a ROM:
+
+```bash
+adb push game.sfc /sdcard/Android/data/dev.couchpad/files/roms/
+```
+
+For testing, `ControllerLatency.sfc` from
+[PeterLemon/SNES](https://github.com/PeterLemon/SNES) flashes the screen white
+while any button is held.
 
 ## Layout
 
@@ -40,7 +58,9 @@ The QR carries a per-launch token; connections without it are rejected.
 ## Build
 
 Requires JDK 17+ and the Android SDK (API 34). Point `local.properties`
-(git-ignored) at the SDK, e.g. `sdk.dir=E\:\\android-sdk`.
+(git-ignored) at the SDK, e.g. `sdk.dir=E\:\\android-sdk`. Optionally set
+`buildRoot=E\:/dev/build/couchpad` to keep build outputs out of a synced folder
+like OneDrive, which locks files mid-build.
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug

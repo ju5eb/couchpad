@@ -13,3 +13,8 @@
 *.aab
 *.keystore
 *.jks
+
+# Emulator cores are fetched with scripts/fetch-core.sh, ROMs are pushed to the device
+/app/src/main/jniLibs/
+*.sfc
+*.smc

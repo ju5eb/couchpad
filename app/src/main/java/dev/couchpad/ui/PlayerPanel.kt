@@ -12,21 +12,21 @@ import dev.couchpad.domain.ControllerButton
 /** Shows one player's connection state and which buttons are held. */
 class PlayerPanel(context: Context, private val player: Int) : LinearLayout(context) {
     private val title = TextView(context).apply {
-        textSize = 22f
+        textSize = 14f
         setTextColor(Color.WHITE)
     }
     private val buttons = ControllerButton.entries.associateWith { button ->
         TextView(context).apply {
             text = button.label()
-            textSize = 16f
+            textSize = 10f
             gravity = Gravity.CENTER
-            setPadding(16, 10, 16, 10)
+            setPadding(8, 4, 8, 4)
         }
     }
 
     init {
         orientation = VERTICAL
-        setPadding(24, 24, 24, 24)
+        setPadding(0, 12, 0, 0)
         addView(title)
         addView(GridLayout(context).apply {
             columnCount = 6
@@ -51,7 +51,7 @@ class PlayerPanel(context: Context, private val player: Int) : LinearLayout(cont
         }
     }
 
-    private fun chipParams() = GridLayout.LayoutParams().apply { setMargins(6, 6, 6, 6) }
+    private fun chipParams() = GridLayout.LayoutParams().apply { setMargins(3, 3, 3, 3) }
 
     private fun ControllerButton.label() = when (this) {
         ControllerButton.UP -> "↑"

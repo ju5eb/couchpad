@@ -45,6 +45,9 @@ dependencies {
     implementation("io.ktor:ktor-server-cio:3.0.3")
     implementation("io.ktor:ktor-server-websockets:3.0.3")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.github.Swordfish90:LibretroDroid:0.13.2")
+    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
     testImplementation("junit:junit:4.13.2")
 }
