@@ -23,12 +23,12 @@ The core is not committed. Fetch it (default ABI `armeabi-v7a`):
 scripts/fetch-core.sh            # or: scripts/fetch-core.sh arm64-v8a
 ```
 
-ROMs are read from the app's external files folder. Launch the app once so it
-creates the folder, then push a ROM:
+Upload games from the phone: tap **Games** on the controller page, then
+**Upload a ROM**. The TV stores it, switches to it, and phones stay connected.
+Any phone can pick another game from the same list.
 
-```bash
-adb push game.sfc /sdcard/Android/data/dev.couchpad/files/roms/
-```
+ROMs live in `/sdcard/Android/data/dev.couchpad/files/roms/` (also reachable
+with `adb push` once the app has run and created the folder).
 
 For testing, `ControllerLatency.sfc` from
 [PeterLemon/SNES](https://github.com/PeterLemon/SNES) flashes the screen white
@@ -50,6 +50,14 @@ while any button is held.
 | Phone → TV | `d:<code>` / `u:<code>` | Button down / up |
 | TV → Phone | `p:<n>` | You are player *n* |
 | TV → Phone | `full` | No free slot |
+
+HTTP endpoints (all require `?token=`):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/games` | One name per line; current game prefixed with `*` |
+| POST | `/games?name=<file>` | Raw ROM body, max 8 MB, `.sfc`/`.smc` only |
+| POST | `/play?name=<file>` | Switch the TV to that game |
 
 Codes: `U D L R A B X Y SL SR ST SE`.
 

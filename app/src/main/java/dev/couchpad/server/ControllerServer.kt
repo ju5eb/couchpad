@@ -3,13 +3,19 @@ package dev.couchpad.server
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.ControllerProtocol
 import dev.couchpad.domain.PlayerSlots
+import dev.couchpad.domain.RomLibrary
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.request.receive
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.WebSockets
@@ -23,15 +29,19 @@ import io.ktor.websocket.readText
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Serves the phone controller page and receives button input over WebSocket.
- * Only phones that scanned the QR (and therefore know [token]) are accepted.
+ * Serves the phone controller page, receives button input over WebSocket and
+ * lets phones upload and pick games. Every endpoint except the page itself
+ * requires [token], which phones only get by scanning the QR.
  */
 class ControllerServer(
     private val port: Int,
     private val token: String,
     private val controllerPage: String,
     private val slots: PlayerSlots,
+    private val library: RomLibrary,
+    private val currentGame: () -> String?,
     private val onEvent: (ControllerEvent) -> Unit,
+    private val onGameSelected: (String) -> Unit,
 ) {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -43,6 +53,9 @@ class ControllerServer(
             }
             routing {
                 get("/") { call.respondText(controllerPage, ContentType.Text.Html) }
+                get("/games") { if (call.authorized()) call.listGames() }
+                post("/games") { if (call.authorized()) call.uploadGame() }
+                post("/play") { if (call.authorized()) call.playGame() }
                 webSocket("/ws") { handleController() }
             }
         }.also { it.start(wait = false) }
@@ -51,6 +64,41 @@ class ControllerServer(
     fun stop() {
         server?.stop(gracePeriodMillis = 200, timeoutMillis = 1_000)
         server = null
+    }
+
+    private suspend fun ApplicationCall.authorized(): Boolean {
+        if (request.queryParameters["token"] == token) return true
+        respondText("Invalid token", status = HttpStatusCode.Forbidden)
+        return false
+    }
+
+    /** One name per line; the game currently loaded is prefixed with `*`. */
+    private suspend fun ApplicationCall.listGames() {
+        val current = currentGame()
+        val body = library.list().joinToString("\n") { if (it == current) "*$it" else it }
+        respondText(body, ContentType.Text.Plain)
+    }
+
+    private suspend fun ApplicationCall.uploadGame() {
+        val name = request.queryParameters["name"].orEmpty()
+        val length = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+            ?: return respondText("Missing Content-Length", status = HttpStatusCode.LengthRequired)
+        if (length > RomLibrary.MAX_BYTES) {
+            return respondText("The file is larger than 8 MB", status = HttpStatusCode.PayloadTooLarge)
+        }
+        when (val result = library.save(name, receive<ByteArray>())) {
+            is RomLibrary.SaveResult.Saved -> respondText(result.name, status = HttpStatusCode.Created)
+            is RomLibrary.SaveResult.Rejected -> respondText(result.reason, status = HttpStatusCode.BadRequest)
+        }
+    }
+
+    private suspend fun ApplicationCall.playGame() {
+        val name = request.queryParameters["name"]
+        if (library.resolve(name) == null) {
+            return respondText("Unknown game", status = HttpStatusCode.NotFound)
+        }
+        onGameSelected(name!!)
+        respondText("OK")
     }
 
     private suspend fun DefaultWebSocketServerSession.handleController() {

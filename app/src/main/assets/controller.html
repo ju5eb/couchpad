@@ -9,8 +9,20 @@
   :root { --bg:#14141c; --pad:#23232e; --key:#3a3a48; --text:#e8e8f0; --muted:#8a8aa0; }
   * { box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:system-ui, sans-serif; overflow:hidden; touch-action:none; }
-  #status { position:fixed; top:8px; left:50%; transform:translateX(-50%); font-size:13px; color:var(--muted); white-space:nowrap; }
+  #bar { position:fixed; top:6px; left:50%; transform:translateX(-50%); z-index:2; display:flex; align-items:center; gap:10px; white-space:nowrap; }
+  #status { font-size:13px; color:var(--muted); }
   #status.ok { color:#7ee2a8; }
+  #menuBtn { border:0; border-radius:14px; padding:6px 12px; background:var(--key); color:var(--text); font:inherit; font-size:13px; }
+
+  #menu { position:fixed; inset:0; z-index:5; display:none; flex-direction:column; gap:10px; padding:16px; background:rgba(12,12,18,.97); overflow-y:auto; touch-action:pan-y; }
+  #menu.open { display:flex; }
+  #menu header { display:flex; justify-content:space-between; align-items:center; }
+  #menu h2 { margin:0; font-size:18px; }
+  #menu button, #menu label { border:0; border-radius:10px; padding:12px 14px; background:var(--key); color:var(--text); font:inherit; font-size:15px; text-align:left; }
+  #menu .current { outline:2px solid #6b4fd8; }
+  #menu .upload { background:#6b4fd8; text-align:center; }
+  #menu .msg { font-size:13px; color:var(--muted); min-height:1em; }
+  #games { display:flex; flex-direction:column; gap:8px; }
   #rotate { display:none; position:fixed; inset:0; align-items:center; justify-content:center; text-align:center; padding:24px; font-size:18px; background:var(--bg); z-index:10; }
   @media (orientation:portrait) { #rotate { display:flex; } }
 
@@ -42,7 +54,20 @@
 </head>
 <body>
   <div id="rotate">Rotate your phone to landscape</div>
-  <div id="status">Connecting…</div>
+  <div id="bar">
+    <span id="status">Connecting…</span>
+    <button id="menuBtn" type="button">Games</button>
+  </div>
+
+  <div id="menu">
+    <header>
+      <h2>Games</h2>
+      <button id="closeBtn" type="button">Close</button>
+    </header>
+    <label class="upload">Upload a ROM (.sfc / .smc)<input id="file" type="file" hidden></label>
+    <div class="msg" id="msg"></div>
+    <div id="games"></div>
+  </div>
 
   <div class="shoulder l k" data-b="SL">L</div>
   <div class="shoulder r k" data-b="SR">R</div>
@@ -124,10 +149,13 @@
 
   function mark(b, on) { document.querySelectorAll(`[data-b="${b}"]`).forEach(el => el.classList.toggle("on", on)); }
 
-  const track = (e) => { e.preventDefault(); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); sync(); };
-  const untrack = (e) => { e.preventDefault(); pointers.delete(e.pointerId); sync(); };
+  // Taps on the bar and the games menu behave like a normal page, not like the gamepad.
+  const isMenuUi = (e) => e.target instanceof Element && !!e.target.closest("#bar, #menu");
+  const track = (e) => { if (isMenuUi(e)) return; e.preventDefault(); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); sync(); };
+  const untrack = (e) => { if (!pointers.has(e.pointerId)) return; e.preventDefault(); pointers.delete(e.pointerId); sync(); };
 
   document.addEventListener("pointerdown", (e) => {
+    if (isMenuUi(e)) return;
     track(e);
     if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
@@ -137,7 +165,73 @@
   document.addEventListener("pointerup", untrack, { passive: false });
   document.addEventListener("pointercancel", untrack, { passive: false });
   document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
-  document.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("contextmenu", (e) => { if (!isMenuUi(e)) e.preventDefault(); });
+
+  // ---- Games menu ----
+  const MAX_BYTES = 8 * 1024 * 1024;
+  const menu = document.getElementById("menu");
+  const gamesEl = document.getElementById("games");
+  const msgEl = document.getElementById("msg");
+  const fileInput = document.getElementById("file");
+
+  const api = (path, params = {}, options = {}) => {
+    const query = new URLSearchParams({ ...params, token });
+    return fetch(`${path}?${query}`, options);
+  };
+
+  function showMessage(text) { msgEl.textContent = text; }
+
+  async function loadGames() {
+    gamesEl.textContent = "";
+    try {
+      const response = await api("/games");
+      const lines = (await response.text()).split("\n").filter(Boolean);
+      if (lines.length === 0) { showMessage("No games yet. Upload one to start."); return; }
+      for (const line of lines) {
+        const current = line.startsWith("*");
+        const name = current ? line.slice(1) : line;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = (current ? "▶ " : "") + name.replace(/\.(sfc|smc)$/i, "");
+        if (current) button.classList.add("current");
+        button.addEventListener("click", () => play(name));
+        gamesEl.appendChild(button);
+      }
+    } catch { showMessage("Could not load the game list."); }
+  }
+
+  async function play(name) {
+    showMessage(`Starting ${name}…`);
+    const response = await api("/play", { name }, { method: "POST" }).catch(() => null);
+    if (response && response.ok) { closeMenu(); } else { showMessage("Could not start that game."); }
+  }
+
+  async function upload(file) {
+    if (!/\.(sfc|smc)$/i.test(file.name)) { showMessage("Only .sfc or .smc files are supported."); return; }
+    if (file.size > MAX_BYTES) { showMessage("The file is larger than 8 MB."); return; }
+    showMessage(`Uploading ${file.name}…`);
+    try {
+      const response = await api("/games", { name: file.name }, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const text = await response.text();
+      if (!response.ok) { showMessage(text || "Upload failed."); return; }
+      await play(text);
+    } catch { showMessage("Upload failed. Check the connection to the TV."); }
+  }
+
+  function openMenu() { releaseAll(); showMessage(""); menu.classList.add("open"); loadGames(); }
+  function closeMenu() { menu.classList.remove("open"); }
+
+  document.getElementById("menuBtn").addEventListener("click", openMenu);
+  document.getElementById("closeBtn").addEventListener("click", closeMenu);
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (file) upload(file);
+  });
 
   connect();
 })();

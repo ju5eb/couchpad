@@ -12,6 +12,7 @@
         android:required="false" />
 
     <application
+        android:name=".CouchpadApp"
         android:allowBackup="false"
         android:banner="@drawable/banner"
         android:icon="@android:drawable/sym_def_app_icon"

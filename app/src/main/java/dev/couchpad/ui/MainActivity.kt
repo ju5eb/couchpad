@@ -14,36 +14,36 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
 import com.swordfish.libretrodroid.GLRetroViewData
+import dev.couchpad.ControllerHub
+import dev.couchpad.CouchpadApp
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
-import dev.couchpad.domain.PlayerSlots
 import dev.couchpad.emulator.SnesKeyMap
-import dev.couchpad.server.ControllerServer
 import dev.couchpad.server.LocalAddress
 import kotlinx.coroutines.launch
 import java.io.File
-import java.security.SecureRandom
 
-class MainActivity : ComponentActivity() {
+/** Game screen. Recreated whenever a phone picks another game; the hub keeps phones connected. */
+class MainActivity : ComponentActivity(), ControllerHub.Listener {
     private val panels = mutableMapOf<Int, PlayerPanel>()
-    private var server: ControllerServer? = null
     private var retroView: GLRetroView? = null
+    private lateinit var hub: ControllerHub
     private lateinit var statusLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hub = (application as CouchpadApp).hub
 
-        val token = newToken()
-        val url = LocalAddress.find()?.let { "http://$it:$PORT/?t=$token" }
-
+        val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        statusLabel = label("", 18f)
-        val rom = findRom()
-        if (rom != null) {
-            root.addView(createRetroView(rom), FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        statusLabel = label("", 16f)
+
+        val game = hub.library.resolve(hub.selectedGame) ?: hub.library.list().firstOrNull()?.let(hub.library::resolve)
+        if (game != null) {
+            root.addView(createRetroView(game), FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         } else {
-            statusLabel.text = "No ROM found in\n${romsDir().absolutePath}"
+            statusLabel.text = "No games yet.\nScan the QR and upload one from your phone."
         }
         root.addView(buildOverlay(url), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -52,25 +52,27 @@ class MainActivity : ComponentActivity() {
         ))
         setContentView(root)
 
-        server = ControllerServer(
-            port = PORT,
-            token = token,
-            controllerPage = assets.open("controller.html").bufferedReader().use { it.readText() },
-            slots = PlayerSlots(capacity = MAX_PLAYERS),
-            onEvent = { event -> runOnUiThread { handle(event) } },
-        ).also { it.start() }
+        hub.connectedPlayers().forEach { panels[it]?.setConnected(true) }
+        hub.listener = this
     }
 
     override fun onDestroy() {
-        server?.stop()
-        server = null
+        if (hub.listener === this) hub.listener = null
         super.onDestroy()
     }
 
-    private fun createRetroView(rom: File): GLRetroView {
+    override fun onControllerEvent(event: ControllerEvent) {
+        runOnUiThread { handle(event) }
+    }
+
+    override fun onGameSelected() {
+        runOnUiThread { recreate() }
+    }
+
+    private fun createRetroView(game: File): GLRetroView {
         val data = GLRetroViewData(this).apply {
             coreFilePath = CORE_LIBRARY
-            gameFilePath = rom.absolutePath
+            gameFilePath = game.absolutePath
             systemDirectory = filesDir.absolutePath
             savesDirectory = filesDir.absolutePath
             preferLowLatencyAudio = true
@@ -81,7 +83,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 view.getGLRetroErrors().collect { code -> statusLabel.text = "Emulator error $code" }
             }
-            statusLabel.text = rom.name
+            statusLabel.text = game.nameWithoutExtension
         }
     }
 
@@ -105,13 +107,6 @@ class MainActivity : ComponentActivity() {
         retroView?.sendKeyEvent(action, SnesKeyMap.keyCode(button), port)
     }
 
-    /** Created by the app itself so it owns the folder; adb can then push ROMs into it. */
-    private fun romsDir(): File = File(getExternalFilesDir(null), "roms").apply { mkdirs() }
-
-    private fun findRom(): File? = romsDir().listFiles()
-        ?.filter { it.extension.lowercase() in ROM_EXTENSIONS }
-        ?.minByOrNull { it.name }
-
     private fun buildOverlay(url: String?): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
@@ -124,7 +119,7 @@ class MainActivity : ComponentActivity() {
             addView(label("No network. Connect the TV to Wi-Fi.", 14f))
         }
         addView(statusLabel)
-        (1..MAX_PLAYERS).forEach { player ->
+        (1..ControllerHub.MAX_PLAYERS).forEach { player ->
             addView(PlayerPanel(context, player).also { panels[player] = it })
         }
     }
@@ -137,16 +132,7 @@ class MainActivity : ComponentActivity() {
         setPadding(0, 8, 0, 0)
     }
 
-    private fun newToken(): String {
-        val random = SecureRandom()
-        return (1..8).map { TOKEN_CHARS[random.nextInt(TOKEN_CHARS.length)] }.joinToString("")
-    }
-
     private companion object {
-        const val PORT = 8080
-        const val MAX_PLAYERS = 2
         const val CORE_LIBRARY = "libsnes9x_libretro_android.so"
-        const val TOKEN_CHARS = "abcdefghjkmnpqrstuvwxyz23456789"
-        val ROM_EXTENSIONS = setOf("sfc", "smc")
     }
 }
