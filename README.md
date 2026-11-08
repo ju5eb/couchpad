@@ -30,6 +30,15 @@ Any phone can pick another game from the same list.
 ROMs live in `/sdcard/Android/data/dev.couchpad/files/roms/` (also reachable
 with `adb push` once the app has run and created the folder).
 
+### Frame pacing on weak TVs
+
+LibretroDroid runs one emulated frame per drawn frame when the display reports
+~60 Hz. A TV that can only draw ~40 fps then plays games at ~0.7x. On the first
+game launch Couchpad measures drawn fps; below 55 it remembers the device needs
+wall-clock pacing, restarts the game once, and from then on makes LibretroDroid
+see a 50 Hz display (`RefreshRateContext`) so it runs up to two emulated frames
+per draw. Check with `adb logcat -s Couchpad`.
+
 For testing, `ControllerLatency.sfc` from
 [PeterLemon/SNES](https://github.com/PeterLemon/SNES) flashes the screen white
 while any button is held.

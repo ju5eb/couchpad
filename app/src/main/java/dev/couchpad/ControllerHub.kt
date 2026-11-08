@@ -24,6 +24,14 @@ class ControllerHub(context: Context) {
     var overlayVisible: Boolean = true
         private set
 
+    /**
+     * Whether this device needs wall-clock frame pacing because it cannot draw 60
+     * frames per second. Null until measured once; persisted afterwards.
+     */
+    var wallClockPacing: Boolean?
+        get() = if (prefs.contains(KEY_PACING)) prefs.getBoolean(KEY_PACING, false) else null
+        set(value) = prefs.edit().apply { if (value == null) remove(KEY_PACING) else putBoolean(KEY_PACING, value) }.apply()
+
     fun toggleOverlay() {
         overlayVisible = !overlayVisible
         listener?.onOverlayChanged()
@@ -87,6 +95,7 @@ class ControllerHub(context: Context) {
         const val MAX_PLAYERS = 2
         private const val KEY_GAME = "selected_game"
         private const val KEY_TOKEN = "token"
+        private const val KEY_PACING = "wall_clock_pacing"
         private const val TOKEN_CHARS = "abcdefghjkmnpqrstuvwxyz23456789"
     }
 }
