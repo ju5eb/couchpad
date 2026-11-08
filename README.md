@@ -39,10 +39,10 @@ The QR carries a per-launch token; connections without it are rejected.
 
 ## Build
 
-Requires JDK 17+ and the Android SDK (API 35).
+Requires JDK 17+ and the Android SDK (API 34). Point `local.properties`
+(git-ignored) at the SDK, e.g. `sdk.dir=E\:\\android-sdk`.
 
 ```bash
-gradle wrapper        # once, to generate gradlew
 ./gradlew testDebugUnitTest assembleDebug
 ```
 

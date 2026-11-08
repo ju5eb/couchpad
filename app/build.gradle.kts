@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "dev.couchpad"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "dev.couchpad"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
     }
