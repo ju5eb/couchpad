@@ -2,6 +2,7 @@ package dev.couchpad.ui
 
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -13,6 +14,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
+import com.swordfish.libretrodroid.GLRetroView.GLRetroEvents
 import com.swordfish.libretrodroid.GLRetroViewData
 import dev.couchpad.ControllerHub
 import dev.couchpad.CouchpadApp
@@ -20,8 +22,10 @@ import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.emulator.SnesKeyMap
 import dev.couchpad.server.LocalAddress
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Game screen. Recreated whenever a phone picks another game; the hub keeps phones connected. */
 class MainActivity : ComponentActivity(), ControllerHub.Listener {
@@ -29,6 +33,7 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
     private var retroView: GLRetroView? = null
     private lateinit var hub: ControllerHub
     private lateinit var statusLabel: TextView
+    private lateinit var overlay: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,7 +50,8 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         } else {
             statusLabel.text = "No games yet.\nScan the QR and upload one from your phone."
         }
-        root.addView(buildOverlay(url), FrameLayout.LayoutParams(
+        overlay = buildOverlay(url)
+        root.addView(overlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END,
@@ -53,6 +59,7 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         setContentView(root)
 
         hub.connectedPlayers().forEach { panels[it]?.setConnected(true) }
+        applyOverlayVisibility()
         hub.listener = this
     }
 
@@ -61,12 +68,30 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         super.onDestroy()
     }
 
+    /** The TV remote's OK / Menu / Info button shows or hides the QR panel. */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode in OVERLAY_TOGGLE_KEYS && event.repeatCount == 0) {
+            hub.toggleOverlay()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onControllerEvent(event: ControllerEvent) {
         runOnUiThread { handle(event) }
     }
 
     override fun onGameSelected() {
         runOnUiThread { recreate() }
+    }
+
+    override fun onOverlayChanged() {
+        runOnUiThread { applyOverlayVisibility() }
+    }
+
+    /** Hidden while a game runs if requested; always shown when there is nothing to play. */
+    private fun applyOverlayVisibility() {
+        overlay.visibility = if (hub.overlayVisible || retroView == null) View.VISIBLE else View.GONE
     }
 
     private fun createRetroView(game: File): GLRetroView {
@@ -83,7 +108,22 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
             lifecycleScope.launch {
                 view.getGLRetroErrors().collect { code -> statusLabel.text = "Emulator error $code" }
             }
+            logFrameRate(view)
             statusLabel.text = game.nameWithoutExtension
+        }
+    }
+
+    /** Logs rendered frames per second (`adb logcat -s Couchpad`); a full-speed SNES game runs at ~60. */
+    private fun logFrameRate(view: GLRetroView) {
+        val frames = AtomicInteger()
+        lifecycleScope.launch {
+            view.getGLRetroEvents().collect { if (it is GLRetroEvents.FrameRendered) frames.incrementAndGet() }
+        }
+        lifecycleScope.launch {
+            while (true) {
+                delay(FPS_WINDOW_MS)
+                Log.i(TAG, "fps=${frames.getAndSet(0) * 1000.0 / FPS_WINDOW_MS} overlay=${overlay.visibility == View.VISIBLE}")
+            }
         }
     }
 
@@ -122,6 +162,7 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         (1..ControllerHub.MAX_PLAYERS).forEach { player ->
             addView(PlayerPanel(context, player).also { panels[player] = it })
         }
+        addView(label("Press OK on the remote to hide", 11f).apply { alpha = 0.6f })
     }
 
     private fun label(text: String, size: Float) = TextView(this).apply {
@@ -134,5 +175,13 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
 
     private companion object {
         const val CORE_LIBRARY = "libsnes9x_libretro_android.so"
+        const val TAG = "Couchpad"
+        const val FPS_WINDOW_MS = 2_000L
+        val OVERLAY_TOGGLE_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_INFO,
+        )
     }
 }

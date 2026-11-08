@@ -16,6 +16,17 @@ class ControllerHub(context: Context) {
     interface Listener {
         fun onControllerEvent(event: ControllerEvent)
         fun onGameSelected()
+        fun onOverlayChanged()
+    }
+
+    /** Whether the QR / player panel is shown on the TV. Kept here so it survives game switches. */
+    @Volatile
+    var overlayVisible: Boolean = true
+        private set
+
+    fun toggleOverlay() {
+        overlayVisible = !overlayVisible
+        listener?.onOverlayChanged()
     }
 
     private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)
@@ -38,6 +49,7 @@ class ControllerHub(context: Context) {
         currentGame = { selectedGame },
         onEvent = ::dispatch,
         onGameSelected = ::selectGame,
+        onToggleOverlay = ::toggleOverlay,
     )
 
     /** Persisted so the last game reopens after a restart. */

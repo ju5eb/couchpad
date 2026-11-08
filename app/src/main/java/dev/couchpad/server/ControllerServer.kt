@@ -42,6 +42,7 @@ class ControllerServer(
     private val currentGame: () -> String?,
     private val onEvent: (ControllerEvent) -> Unit,
     private val onGameSelected: (String) -> Unit,
+    private val onToggleOverlay: () -> Unit,
 ) {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -56,6 +57,12 @@ class ControllerServer(
                 get("/games") { if (call.authorized()) call.listGames() }
                 post("/games") { if (call.authorized()) call.uploadGame() }
                 post("/play") { if (call.authorized()) call.playGame() }
+                post("/overlay") {
+                    if (call.authorized()) {
+                        onToggleOverlay()
+                        call.respondText("OK")
+                    }
+                }
                 webSocket("/ws") { handleController() }
             }
         }.also { it.start(wait = false) }

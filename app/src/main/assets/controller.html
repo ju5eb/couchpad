@@ -65,6 +65,7 @@
       <button id="closeBtn" type="button">Close</button>
     </header>
     <label class="upload">Upload a ROM (.sfc / .smc)<input id="file" type="file" hidden></label>
+    <button id="overlayBtn" type="button">Show / hide QR on the TV</button>
     <div class="msg" id="msg"></div>
     <div id="games"></div>
   </div>
@@ -234,6 +235,10 @@
 
   document.getElementById("menuBtn").addEventListener("click", openMenu);
   document.getElementById("closeBtn").addEventListener("click", closeMenu);
+  document.getElementById("overlayBtn").addEventListener("click", async () => {
+    try { await api("/overlay", {}, { method: "POST" }); closeMenu(); }
+    catch { showMessage("Could not reach the TV."); }
+  });
   fileInput.addEventListener("change", () => {
     const file = fileInput.files && fileInput.files[0];
     fileInput.value = "";
