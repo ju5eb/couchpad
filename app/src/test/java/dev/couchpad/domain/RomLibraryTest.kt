@@ -55,6 +55,44 @@ class RomLibraryTest {
         assertEquals(emptyList<String>(), library.list())
     }
 
+    private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            entries.forEach { (name, bytes) ->
+                zip.putNextEntry(java.util.zip.ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return out.toByteArray()
+    }
+
+    @Test
+    fun `extracts the rom from a zip`() {
+        val library = RomLibrary(temp.newFolder("roms"))
+        val zip = zipOf("readme.txt" to byteArrayOf(9), "dist/Cool Game.sfc" to byteArrayOf(1, 2, 3))
+
+        assertEquals(RomLibrary.SaveResult.Saved("Cool Game.sfc"), library.save("cool.zip", zip))
+        assertEquals(3L, library.resolve("Cool Game.sfc")?.length())
+    }
+
+    @Test
+    fun `rejects zips without a rom or that are not zips`() {
+        val library = RomLibrary(temp.newFolder("roms"))
+
+        assertTrue(library.save("docs.zip", zipOf("readme.txt" to byteArrayOf(9))) is RomLibrary.SaveResult.Rejected)
+        assertTrue(library.save("broken.zip", byteArrayOf(1, 2, 3)) is RomLibrary.SaveResult.Rejected)
+        assertEquals(emptyList<String>(), library.list())
+    }
+
+    @Test
+    fun `rejects a rom inside a zip that is too large`() {
+        val library = RomLibrary(temp.newFolder("roms"))
+        val zip = zipOf("big.sfc" to ByteArray(RomLibrary.MAX_BYTES + 10))
+
+        assertTrue(library.save("big.zip", zip) is RomLibrary.SaveResult.Rejected)
+    }
+
     @Test
     fun `uploading the same name replaces the file`() {
         val library = RomLibrary(temp.newFolder("roms"))
