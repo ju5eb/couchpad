@@ -74,7 +74,7 @@ class ControllerHub(context: Context) {
             when (event) {
                 is ControllerEvent.Connected -> connectedPlayers += event.player
                 is ControllerEvent.Disconnected -> connectedPlayers -= event.player
-                is ControllerEvent.Button -> Unit
+                is ControllerEvent.Button, is ControllerEvent.Latency -> Unit
             }
         }
         listener?.onControllerEvent(event)
@@ -95,7 +95,8 @@ class ControllerHub(context: Context) {
         const val MAX_PLAYERS = 2
         private const val KEY_GAME = "selected_game"
         private const val KEY_TOKEN = "token"
-        private const val KEY_PACING = "wall_clock_pacing"
+        // v2: re-measure once now that game mode lets the TV draw 60 fps.
+        private const val KEY_PACING = "wall_clock_pacing_v2"
         private const val TOKEN_CHARS = "abcdefghjkmnpqrstuvwxyz23456789"
     }
 }

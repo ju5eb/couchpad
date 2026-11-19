@@ -2,6 +2,7 @@ package dev.couchpad.ui
 
 import android.content.Context
 import android.graphics.Color
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -33,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Game screen. Recreated whenever a phone picks another game; the hub keeps phones connected. */
 class MainActivity : ComponentActivity(), ControllerHub.Listener {
     private val panels = mutableMapOf<Int, PlayerPanel>()
+    /** Read from network threads: input goes straight to the emulator, not via the main thread. */
+    @Volatile
     private var retroView: GLRetroView? = null
     private var pacingContext: RefreshRateContext? = null
     private lateinit var hub: ControllerHub
@@ -43,6 +46,8 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Ask the TV for its game mode: skips picture processing that adds tens of ms of lag.
+        window.attributes = window.attributes.apply { preferMinimalPostProcessing = true }
         hub = (application as CouchpadApp).hub
 
         val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
@@ -69,6 +74,23 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         hub.listener = this
     }
 
+    /** Held while the game screen is visible: Wi-Fi power save causes 100 ms input spikes. */
+    private val wifiLock by lazy {
+        getSystemService(WifiManager::class.java)
+            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "couchpad:input")
+            .apply { setReferenceCounted(false) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        wifiLock.acquire()
+    }
+
+    override fun onPause() {
+        wifiLock.release()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (hub.listener === this) hub.listener = null
         super.onDestroy()
@@ -84,8 +106,23 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         return super.onKeyDown(keyCode, event)
     }
 
+    /**
+     * Called on a network thread. Input reaches the emulator right here
+     * (GLRetroView queues it for its GL thread); the on-screen panel updates later
+     * on the main thread, off the critical path.
+     */
     override fun onControllerEvent(event: ControllerEvent) {
-        runOnUiThread { handle(event) }
+        val port = event.player - 1
+        when (event) {
+            is ControllerEvent.Button -> sendKey(event.change.button, event.change.pressed, port)
+            is ControllerEvent.Disconnected -> ControllerButton.entries.forEach { sendKey(it, pressed = false, port = port) }
+            is ControllerEvent.Latency -> {
+                Log.i(TAG, "latency player=${event.player} avg=${event.report.averageMs}ms max=${event.report.maxMs}ms")
+                return
+            }
+            is ControllerEvent.Connected -> Unit
+        }
+        runOnUiThread { render(event) }
     }
 
     override fun onGameSelected() {
@@ -174,19 +211,22 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
         }
     }
 
-    private fun handle(event: ControllerEvent) {
-        val port = event.player - 1
+    private fun render(event: ControllerEvent) {
         when (event) {
-            is ControllerEvent.Connected -> panels[event.player]?.setConnected(true)
-            is ControllerEvent.Disconnected -> {
-                panels[event.player]?.setConnected(false)
-                ControllerButton.entries.forEach { sendKey(it, pressed = false, port = port) }
+            is ControllerEvent.Connected -> {
+                panels[event.player]?.setConnected(true)
+                hideOverlayWhenEveryoneJoined()
             }
-            is ControllerEvent.Button -> {
-                panels[event.player]?.setPressed(event.change.button, event.change.pressed)
-                sendKey(event.change.button, event.change.pressed, port)
-            }
+            is ControllerEvent.Disconnected -> panels[event.player]?.setConnected(false)
+            is ControllerEvent.Button -> panels[event.player]?.setPressed(event.change.button, event.change.pressed)
+            is ControllerEvent.Latency -> Unit
         }
+    }
+
+    /** The translucent panel costs draw time; once all seats are taken, nobody needs the QR. */
+    private fun hideOverlayWhenEveryoneJoined() {
+        val full = hub.connectedPlayers().size >= ControllerHub.MAX_PLAYERS
+        if (full && retroView != null && hub.overlayVisible) hub.toggleOverlay()
     }
 
     private fun sendKey(button: ControllerButton, pressed: Boolean, port: Int) {

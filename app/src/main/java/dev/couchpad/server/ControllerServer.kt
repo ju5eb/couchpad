@@ -129,8 +129,14 @@ class ControllerServer(
         try {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
-                val change = ControllerProtocol.parse(frame.readText()) ?: continue
-                onEvent(ControllerEvent.Button(lease.player, change))
+                val text = frame.readText()
+                val change = ControllerProtocol.parse(text)
+                when {
+                    change != null -> onEvent(ControllerEvent.Button(lease.player, change))
+                    ControllerProtocol.isPing(text) -> send(Frame.Text(text))
+                    else -> ControllerProtocol.parseLatencyReport(text)
+                        ?.let { onEvent(ControllerEvent.Latency(lease.player, it)) }
+                }
             }
         } finally {
             if (slots.release(lease)) onEvent(ControllerEvent.Disconnected(lease.player))

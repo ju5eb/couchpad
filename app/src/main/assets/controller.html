@@ -116,13 +116,65 @@
 
   function setStatus(text, ok) { statusEl.textContent = text; statusEl.classList.toggle("ok", !!ok); }
 
+  // ---- Latency: ping every 250 ms. Shows round trip on screen and keeps the
+  // phone's Wi-Fi radio awake, which avoids power-save spikes between taps.
+  const PING_MS = 250;
+  const REPORT_MS = 5000;
+  const pending = new Map();    // ping id -> sent time
+  let samples = [];             // round trips since the last report
+  let lastRtt = null;
+  let player = null;
+  let pingSeq = 0;
+  let pingTimer = null;
+  let reportTimer = null;
+
+  function showPlayer() {
+    if (player === null) return;
+    setStatus(lastRtt === null ? `Player ${player}` : `Player ${player} · ${lastRtt} ms`, true);
+  }
+
+  function startPings() {
+    stopPings();
+    pingTimer = setInterval(() => {
+      const id = ++pingSeq;
+      pending.set(id, performance.now());
+      if (pending.size > 20) pending.delete(pending.keys().next().value);
+      send("t:" + id);
+    }, PING_MS);
+    reportTimer = setInterval(() => {
+      if (samples.length === 0) return;
+      const avg = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length);
+      send(`r:${avg}:${Math.max(...samples)}`);
+      samples = [];
+    }, REPORT_MS);
+  }
+
+  function stopPings() {
+    clearInterval(pingTimer);
+    clearInterval(reportTimer);
+    pending.clear();
+  }
+
+  function onPong(id) {
+    const sent = pending.get(id);
+    if (sent === undefined) return;
+    pending.delete(id);
+    lastRtt = Math.round(performance.now() - sent);
+    samples.push(lastRtt);
+    showPlayer();
+  }
+
   function connect() {
     socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}&id=${encodeURIComponent(clientId)}`);
     socket.onmessage = (e) => {
+      if (e.data.startsWith("t:")) { onPong(Number(e.data.slice(2))); return; }
       if (e.data === "full") { setStatus("Game is full"); return; }
-      if (e.data.startsWith("p:")) { setStatus(`Player ${e.data.slice(2)}`, true); retryMs = 500; }
+      if (e.data.startsWith("p:")) { player = e.data.slice(2); showPlayer(); retryMs = 500; startPings(); }
     };
     socket.onclose = (e) => {
+      stopPings();
+      player = null;
+      lastRtt = null;
       releaseAll();
       if (e.code === POLICY_VIOLATION) { stale = true; setStatus(STALE_QR); return; }
       setStatus("Reconnecting…");
