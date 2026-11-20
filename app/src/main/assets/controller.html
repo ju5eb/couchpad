@@ -42,13 +42,12 @@
   .pad { position:fixed; inset:0; display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
     padding:16vh calc(4vw + var(--safe-r)) 4vh calc(4vw + var(--safe-l)); }
 
-  /* ---------- Joystick (floating: the base jumps under the thumb) ---------- */
+  /* ---------- Joystick (fixed base; directions measured from its centre) ---------- */
   .stick-zone { position:relative; align-self:stretch; justify-self:stretch; margin:-12vh 0 -4vh calc(-4vw - var(--safe-l)); }
   .stick-base { position:absolute; left:50%; top:55%; width:50vh; height:50vh; translate:-50% -50%; border-radius:50%;
     background:radial-gradient(circle at 50% 42%, #1d1d28, var(--well));
     box-shadow:inset 0 6px 18px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.05), 0 0 0 1.4vh rgba(255,255,255,.025);
-    transition:left 160ms ease-out, top 160ms ease-out; pointer-events:none; }
-  .stick-base.active { transition:none; }
+    pointer-events:none; }
   .stick-base .tick { position:absolute; left:50%; top:50%; width:0; height:0; border:1.5vh solid transparent; opacity:.35; transition:opacity 60ms, filter 60ms; }
   .stick-base .tick[data-b="U"] { border-bottom-color:var(--text); translate:-50% calc(-50% - 21vh); }
   .stick-base .tick[data-b="D"] { border-top-color:var(--text); translate:-50% calc(-50% + 21vh); }
@@ -295,45 +294,31 @@
   const faceKeys = [...faceEl.querySelectorAll("[data-b]")];
   const FACE_CHORD = 1.22;      // press two face buttons when the finger is roughly between them
 
-  // ---- Floating joystick ----
-  // The base jumps under the thumb wherever it lands in the left zone, and is
-  // dragged along if the thumb travels past the rim, so it can never be "lost".
-  const stickZone = document.getElementById("stickZone");
+  // ---- Fixed joystick ----
+  // The base never moves. Directions are measured from its centre, so touching
+  // the top of the ring presses "up" immediately, no drag needed; the knob
+  // jumps under the thumb. Touches anywhere in the left zone count.
   const stickBase = document.getElementById("stickBase");
   const stickKnob = document.getElementById("stickKnob");
   const STICK_DEADZONE = 0.28;  // fraction of the knob travel before any direction registers
   const CARDINAL_HALF = 30;     // degrees each side of up/down/left/right that stay a pure direction
-  let stick = null;             // { id, ox, oy } origin in viewport px while a thumb owns the stick
+  let stick = null;             // { id } while a thumb owns the stick
   const stickDirs = new Set();
 
   /** How far the knob can travel from the centre, in px. */
   const stickTravel = () => stickBase.offsetWidth * 0.36;
 
-  function placeBase(x, y) {
-    const zone = stickZone.getBoundingClientRect();
-    const half = stickBase.offsetWidth / 2;
-    const left = Math.min(Math.max(x - zone.left, half * 0.6), zone.width - half * 0.6);
-    const top = Math.min(Math.max(y - zone.top, half * 0.6), zone.height - half * 0.6);
-    stickBase.style.left = left + "px";
-    stickBase.style.top = top + "px";
-    return { ox: zone.left + left, oy: zone.top + top };
-  }
-
   function startStick(id, x, y) {
     stickBase.classList.add("active");
-    stick = { id, ...placeBase(x, y) };
+    stick = { id };
     moveStick(x, y);
   }
 
   function moveStick(x, y) {
     const travel = stickTravel();
-    let dx = x - stick.ox, dy = y - stick.oy;
-    const dist = Math.hypot(dx, dy);
-    if (dist > travel * 1.35) {                       // drag the base along with the thumb
-      const pull = dist - travel;
-      Object.assign(stick, placeBase(stick.ox + dx / dist * pull, stick.oy + dy / dist * pull));
-      dx = x - stick.ox; dy = y - stick.oy;
-    }
+    const base = stickBase.getBoundingClientRect();
+    const dx = x - (base.left + base.width / 2);
+    const dy = y - (base.top + base.height / 2);
     const d = Math.hypot(dx, dy);
     const k = d > travel ? travel / d : 1;
     stickKnob.style.transform = `translate(${dx * k}px, ${dy * k}px)`;
@@ -353,8 +338,6 @@
     stick = null;
     stickDirs.clear();
     stickBase.classList.remove("active");
-    stickBase.style.left = "";
-    stickBase.style.top = "";
     stickKnob.style.transform = "";
   }
 
