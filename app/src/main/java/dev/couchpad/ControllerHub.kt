@@ -2,6 +2,7 @@ package dev.couchpad
 
 import android.content.Context
 import dev.couchpad.domain.ControllerEvent
+import dev.couchpad.domain.ControllerProtocol
 import dev.couchpad.domain.PlayerSlots
 import dev.couchpad.domain.RomLibrary
 import dev.couchpad.server.ControllerServer
@@ -10,31 +11,18 @@ import java.security.SecureRandom
 
 /**
  * App-wide controller state. Lives for the whole process so phones stay
- * connected (same token, same slots) while the game screen is recreated.
+ * connected (same token, same slots) across the lobby and game screens.
+ * The screen in the foreground registers itself as [listener].
  */
 class ControllerHub(context: Context) {
     interface Listener {
+        /** Called on a network thread. */
         fun onControllerEvent(event: ControllerEvent)
         fun onGameSelected()
-        fun onOverlayChanged()
-    }
-
-    /** Whether the QR / player panel is shown on the TV. Kept here so it survives game switches. */
-    @Volatile
-    var overlayVisible: Boolean = true
-        private set
-
-    /**
-     * Whether this device needs wall-clock frame pacing because it cannot draw 60
-     * frames per second. Null until measured once; persisted afterwards.
-     */
-    var wallClockPacing: Boolean?
-        get() = if (prefs.contains(KEY_PACING)) prefs.getBoolean(KEY_PACING, false) else null
-        set(value) = prefs.edit().apply { if (value == null) remove(KEY_PACING) else putBoolean(KEY_PACING, value) }.apply()
-
-    fun toggleOverlay() {
-        overlayVisible = !overlayVisible
-        listener?.onOverlayChanged()
+        fun onOverlayChanged() = Unit
+        fun onReturnToLobby() = Unit
+        fun onResetGame() = Unit
+        fun onPauseChanged(paused: Boolean) = Unit
     }
 
     private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)
@@ -47,7 +35,34 @@ class ControllerHub(context: Context) {
     @Volatile
     var listener: Listener? = null
 
+    /** Whether the QR / player panel is shown over the game. Kept here so it survives game switches. */
+    @Volatile
+    var overlayVisible: Boolean = true
+        private set
+
+    /** True while the game screen is showing; phones get `s:game`, otherwise `s:lobby`. */
+    @Volatile
+    var inGame: Boolean = false
+        private set
+
+    /**
+     * Whether this device needs wall-clock frame pacing because it cannot draw 60
+     * frames per second. Null until measured once; persisted afterwards.
+     */
+    var wallClockPacing: Boolean?
+        get() = if (prefs.contains(KEY_PACING)) prefs.getBoolean(KEY_PACING, false) else null
+        set(value) = prefs.edit().apply { if (value == null) remove(KEY_PACING) else putBoolean(KEY_PACING, value) }.apply()
+
+    /** Persisted so the lobby can highlight the last game played. */
+    var selectedGame: String?
+        get() = prefs.getString(KEY_GAME, null)
+        private set(value) = prefs.edit().putString(KEY_GAME, value).apply()
+
+    private val lock = Any()
     private val connectedPlayers = mutableSetOf<Int>()
+    private val playersInMenu = mutableSetOf<Int>()
+    private val latencies = mutableMapOf<Int, Int>()
+
     private val server = ControllerServer(
         port = PORT,
         token = token,
@@ -58,31 +73,67 @@ class ControllerHub(context: Context) {
         onEvent = ::dispatch,
         onGameSelected = ::selectGame,
         onToggleOverlay = ::toggleOverlay,
+        onReturnToLobby = { listener?.onReturnToLobby() },
+        onResetGame = { listener?.onResetGame() },
+        currentScreen = ::screenMessage,
     )
-
-    /** Persisted so the last game reopens after a restart. */
-    var selectedGame: String?
-        get() = prefs.getString(KEY_GAME, null)
-        private set(value) = prefs.edit().putString(KEY_GAME, value).apply()
 
     fun start() = server.start()
 
-    fun connectedPlayers(): Set<Int> = synchronized(connectedPlayers) { connectedPlayers.toSet() }
+    fun connectedPlayers(): Set<Int> = synchronized(lock) { connectedPlayers.toSet() }
 
-    private fun dispatch(event: ControllerEvent) {
-        synchronized(connectedPlayers) {
-            when (event) {
-                is ControllerEvent.Connected -> connectedPlayers += event.player
-                is ControllerEvent.Disconnected -> connectedPlayers -= event.player
-                is ControllerEvent.Button, is ControllerEvent.Latency -> Unit
-            }
-        }
-        listener?.onControllerEvent(event)
+    /** Average round trip last reported by each player's phone, in ms. */
+    fun latencies(): Map<Int, Int> = synchronized(lock) { latencies.toMap() }
+
+    fun isPaused(): Boolean = synchronized(lock) { playersInMenu.isNotEmpty() }
+
+    fun toggleOverlay() {
+        overlayVisible = !overlayVisible
+        listener?.onOverlayChanged()
     }
 
-    private fun selectGame(name: String) {
+    /** Called by the screens so phones know whether to show the lobby or the pause menu. */
+    fun setInGame(value: Boolean) {
+        inGame = value
+        if (!value) clearPauses()
+        server.broadcast(screenMessage())
+    }
+
+    fun selectGame(name: String) {
         selectedGame = name
         listener?.onGameSelected()
+    }
+
+    private fun screenMessage() = if (inGame) ControllerProtocol.SCREEN_GAME else ControllerProtocol.SCREEN_LOBBY
+
+    private fun dispatch(event: ControllerEvent) {
+        var pauseChanged: Boolean? = null
+        synchronized(lock) {
+            val wasPaused = playersInMenu.isNotEmpty()
+            when (event) {
+                is ControllerEvent.Connected -> connectedPlayers += event.player
+                is ControllerEvent.Disconnected -> {
+                    connectedPlayers -= event.player
+                    playersInMenu -= event.player
+                    latencies -= event.player
+                }
+                is ControllerEvent.Menu -> if (event.open && inGame) playersInMenu += event.player else playersInMenu -= event.player
+                is ControllerEvent.Latency -> latencies[event.player] = event.report.averageMs
+                is ControllerEvent.Button -> Unit
+            }
+            val paused = playersInMenu.isNotEmpty()
+            if (paused != wasPaused) pauseChanged = paused
+        }
+        listener?.onControllerEvent(event)
+        pauseChanged?.let { listener?.onPauseChanged(it) }
+    }
+
+    /** Leaving the game drops every pending pause. */
+    private fun clearPauses() {
+        val wasPaused = synchronized(lock) {
+            playersInMenu.isNotEmpty().also { playersInMenu.clear() }
+        }
+        if (wasPaused) listener?.onPauseChanged(false)
     }
 
     private fun newToken(): String {

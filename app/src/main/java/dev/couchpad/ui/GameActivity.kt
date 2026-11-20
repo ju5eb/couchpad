@@ -19,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
 import com.swordfish.libretrodroid.GLRetroView.GLRetroEvents
 import com.swordfish.libretrodroid.GLRetroViewData
+import com.swordfish.libretrodroid.LibretroDroid
 import dev.couchpad.ControllerHub
 import dev.couchpad.CouchpadApp
 import dev.couchpad.domain.ControllerButton
@@ -31,8 +32,12 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Game screen. Recreated whenever a phone picks another game; the hub keeps phones connected. */
-class MainActivity : ComponentActivity(), ControllerHub.Listener {
+/**
+ * Game screen, opened from the lobby. Recreated when a phone picks another game;
+ * finishing it (Back on the remote, or "Back to lobby" on a phone) returns to the
+ * lobby. The hub keeps phones connected throughout.
+ */
+class GameActivity : ComponentActivity(), ControllerHub.Listener {
     private val panels = mutableMapOf<Int, PlayerPanel>()
     /** Read from network threads: input goes straight to the emulator, not via the main thread. */
     @Volatile
@@ -42,6 +47,8 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
     private lateinit var root: FrameLayout
     private lateinit var statusLabel: TextView
     private lateinit var overlay: View
+    private lateinit var pauseOverlay: View
+    private var emulationPaused = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,19 +66,19 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
             FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END,
         ))
+        pauseOverlay = buildPauseOverlay()
+        root.addView(pauseOverlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         setContentView(root)
 
-        val game = hub.library.resolve(hub.selectedGame) ?: hub.library.list().firstOrNull()?.let(hub.library::resolve)
-        if (game != null) {
-            statusLabel.text = game.nameWithoutExtension
-            startGame(game)
-        } else {
-            statusLabel.text = "No games yet.\nScan the QR and upload one from your phone."
+        val game = hub.library.resolve(hub.selectedGame)
+        if (game == null) {
+            finish()   // nothing to play: back to the lobby
+            return
         }
-
+        statusLabel.text = game.nameWithoutExtension
+        startGame(game)
         hub.connectedPlayers().forEach { panels[it]?.setConnected(true) }
         applyOverlayVisibility()
-        hub.listener = this
     }
 
     /** Held while the game screen is visible: Wi-Fi power save causes 100 ms input spikes. */
@@ -84,17 +91,65 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
     override fun onResume() {
         super.onResume()
         wifiLock.acquire()
+        hub.listener = this
+        hub.setInGame(true)
+        // The emulator's lifecycle observer resumes it after this method; re-apply a pending pause then.
+        emulationPaused = false
+        root.post { applyPause(hub.isPaused()) }
     }
 
     override fun onPause() {
         wifiLock.release()
+        if (hub.listener === this) hub.listener = null
         super.onPause()
     }
 
     override fun onDestroy() {
-        if (hub.listener === this) hub.listener = null
         super.onDestroy()
         pacingContext?.release()
+    }
+
+    override fun onReturnToLobby() {
+        runOnUiThread { finish() }
+    }
+
+    override fun onResetGame() {
+        retroView?.reset()
+    }
+
+    override fun onPauseChanged(paused: Boolean) {
+        runOnUiThread { applyPause(paused) }
+    }
+
+    /** Freezes emulation the same way LibretroDroid's own lifecycle pause does. */
+    private fun applyPause(paused: Boolean) {
+        pauseOverlay.visibility = if (paused) View.VISIBLE else View.GONE
+        val view = retroView ?: return
+        if (paused == emulationPaused) return
+        emulationPaused = paused
+        if (paused) {
+            view.onPause()
+            LibretroDroid.pause()
+        } else {
+            LibretroDroid.resume()
+            view.onResume()
+        }
+    }
+
+    private fun buildPauseOverlay(): View = FrameLayout(this).apply {
+        setBackgroundColor(Color.argb(150, 0, 0, 0))
+        visibility = View.GONE
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(56, 36, 56, 36)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 36f
+                setColor(Color.argb(235, 23, 23, 31))
+            }
+            addView(label("PAUSED", 30f).apply { typeface = android.graphics.Typeface.DEFAULT_BOLD; letterSpacing = 0.2f })
+            addView(label("A player has the menu open on their phone", 15f).apply { alpha = 0.7f })
+        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
     }
 
     /** The TV remote's OK / Menu / Info button shows or hides the QR panel. */
@@ -114,7 +169,11 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
     override fun onControllerEvent(event: ControllerEvent) {
         val port = event.player - 1
         when (event) {
-            is ControllerEvent.Button -> sendKey(event.change.button, event.change.pressed, port)
+            // While paused, drop presses so they do not fire all at once on resume; releases still go through.
+            is ControllerEvent.Button -> if (!event.change.pressed || !hub.isPaused()) {
+                sendKey(event.change.button, event.change.pressed, port)
+            }
+            is ControllerEvent.Menu -> return
             is ControllerEvent.Disconnected -> ControllerButton.entries.forEach { sendKey(it, pressed = false, port = port) }
             is ControllerEvent.Latency -> {
                 Log.i(TAG, "latency player=${event.player} avg=${event.report.averageMs}ms max=${event.report.maxMs}ms")
@@ -219,7 +278,7 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
             }
             is ControllerEvent.Disconnected -> panels[event.player]?.setConnected(false)
             is ControllerEvent.Button -> panels[event.player]?.setPressed(event.change.button, event.change.pressed)
-            is ControllerEvent.Latency -> Unit
+            is ControllerEvent.Latency, is ControllerEvent.Menu -> Unit
         }
     }
 

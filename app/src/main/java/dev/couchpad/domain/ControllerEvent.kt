@@ -8,4 +8,7 @@ sealed interface ControllerEvent {
     data class Disconnected(override val player: Int) : ControllerEvent
     data class Button(override val player: Int, val change: ButtonChange) : ControllerEvent
     data class Latency(override val player: Int, val report: LatencyReport) : ControllerEvent
+
+    /** The player's phone menu opened ([open] = true) or closed; an open menu pauses the game. */
+    data class Menu(override val player: Int, val open: Boolean) : ControllerEvent
 }

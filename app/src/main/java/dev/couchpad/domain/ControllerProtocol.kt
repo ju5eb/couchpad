@@ -9,11 +9,22 @@ data class LatencyReport(val averageMs: Int, val maxMs: Int)
  * Compact text protocol over WebSocket, kept tiny to minimise latency.
  *
  * Phone -> TV: `d:<code>` (button down), `u:<code>` (button up),
- *              `t:<id>` (ping, echoed back verbatim), `r:<avg>:<max>` (latency report).
- * TV -> Phone: `p:<n>` (assigned player n), `full` (no free slot), `t:<id>` (pong).
+ *              `t:<id>` (ping, echoed back verbatim), `r:<avg>:<max>` (latency report),
+ *              `m:1` / `m:0` (phone menu opened / closed: pauses the game).
+ * TV -> Phone: `p:<n>` (assigned player n), `full` (no free slot), `t:<id>` (pong),
+ *              `s:lobby` / `s:game` (which screen the TV shows).
  */
 object ControllerProtocol {
     const val FULL = "full"
+    const val SCREEN_LOBBY = "s:lobby"
+    const val SCREEN_GAME = "s:game"
+
+    /** True when the phone opened its menu, false when it closed it, null if not a menu message. */
+    fun parseMenu(message: String): Boolean? = when (message) {
+        "m:1" -> true
+        "m:0" -> false
+        else -> null
+    }
 
     fun parse(message: String): ButtonChange? {
         val separator = message.indexOf(':')

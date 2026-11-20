@@ -27,6 +27,14 @@ class ControllerProtocolTest {
     }
 
     @Test
+    fun `parses menu open and close`() {
+        assertEquals(true, ControllerProtocol.parseMenu("m:1"))
+        assertEquals(false, ControllerProtocol.parseMenu("m:0"))
+        assertNull(ControllerProtocol.parseMenu("m:2"))
+        assertNull(ControllerProtocol.parseMenu("d:A"))
+    }
+
+    @Test
     fun `parses latency reports`() {
         assertEquals(LatencyReport(12, 40), ControllerProtocol.parseLatencyReport("r:12:40"))
         listOf("r:12", "r:a:b", "r:50:10", "r:-1:5", "x:1:2").forEach {

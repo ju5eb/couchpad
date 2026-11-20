@@ -2,8 +2,10 @@ package dev.couchpad.server
 
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.ControllerProtocol
+import dev.couchpad.domain.Lease
 import dev.couchpad.domain.PlayerSlots
 import dev.couchpad.domain.RomLibrary
+import java.util.concurrent.ConcurrentHashMap
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -44,8 +46,18 @@ class ControllerServer(
     private val onEvent: (ControllerEvent) -> Unit,
     private val onGameSelected: (String) -> Unit,
     private val onToggleOverlay: () -> Unit,
+    private val onReturnToLobby: () -> Unit,
+    private val onResetGame: () -> Unit,
+    /** Message telling a phone which screen the TV shows (`s:lobby` / `s:game`). */
+    private val currentScreen: () -> String,
 ) {
     private var server: EmbeddedServer<*, *>? = null
+    private val sessions = ConcurrentHashMap<Lease, DefaultWebSocketServerSession>()
+
+    /** Sends [message] to every connected phone without suspending the caller. */
+    fun broadcast(message: String) {
+        sessions.values.forEach { it.outgoing.trySend(Frame.Text(message)) }
+    }
 
     fun start() {
         server = embeddedServer(CIO, port = port, host = "0.0.0.0") {
@@ -62,12 +74,9 @@ class ControllerServer(
                 get("/games") { if (call.authorized()) call.listGames() }
                 post("/games") { if (call.authorized()) call.uploadGame() }
                 post("/play") { if (call.authorized()) call.playGame() }
-                post("/overlay") {
-                    if (call.authorized()) {
-                        onToggleOverlay()
-                        call.respondText("OK")
-                    }
-                }
+                post("/overlay") { if (call.authorized()) call.run(onToggleOverlay) }
+                post("/lobby") { if (call.authorized()) call.run(onReturnToLobby) }
+                post("/reset") { if (call.authorized()) call.run(onResetGame) }
                 webSocket("/ws") { handleController() }
             }
         }.also { it.start(wait = false) }
@@ -82,6 +91,11 @@ class ControllerServer(
         if (request.queryParameters["token"] == token) return true
         respondText("Invalid token", status = HttpStatusCode.Forbidden)
         return false
+    }
+
+    private suspend fun ApplicationCall.run(action: () -> Unit) {
+        action()
+        respondText("OK")
     }
 
     /** One name per line; the game currently loaded is prefixed with `*`. */
@@ -130,20 +144,25 @@ class ControllerServer(
         }
 
         send(Frame.Text(ControllerProtocol.assigned(lease.player)))
+        send(Frame.Text(currentScreen()))
+        sessions[lease] = this
         onEvent(ControllerEvent.Connected(lease.player, params["v"]?.take(32)))
         try {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val text = frame.readText()
                 val change = ControllerProtocol.parse(text)
+                val menu = ControllerProtocol.parseMenu(text)
                 when {
                     change != null -> onEvent(ControllerEvent.Button(lease.player, change))
                     ControllerProtocol.isPing(text) -> send(Frame.Text(text))
+                    menu != null -> onEvent(ControllerEvent.Menu(lease.player, menu))
                     else -> ControllerProtocol.parseLatencyReport(text)
                         ?.let { onEvent(ControllerEvent.Latency(lease.player, it)) }
                 }
             }
         } finally {
+            sessions.remove(lease)
             if (slots.release(lease)) onEvent(ControllerEvent.Disconnected(lease.player))
         }
     }

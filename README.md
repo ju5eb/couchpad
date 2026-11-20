@@ -11,9 +11,13 @@ Phone (browser gamepad) ──WebSocket over LAN──► TV (Ktor server) ─�
 ## Status
 
 - **Phase 1 — controller transport.** QR, WebSocket, 2 players. Done.
-- **Phase 2 — emulator (current).** Snes9x runs through
+- **Phase 2 — emulator.** Snes9x runs through
   [LibretroDroid](https://github.com/Swordfish90/LibretroDroid); each phone
-  drives its own input port. Loads the first ROM found on the device.
+  drives its own input port. Done.
+- **Phase 3 — lobby (current).** The app opens on a lobby (QR, players with
+  latency, game library). A phone's joystick or the TV remote picks a game.
+  In game, the phone's ☰ menu pauses it and offers resume, back to lobby,
+  restart and switching game.
 
 ## Emulator setup
 
@@ -23,9 +27,9 @@ The core is not committed. Fetch it (default ABI `armeabi-v7a`):
 scripts/fetch-core.sh            # or: scripts/fetch-core.sh arm64-v8a
 ```
 
-Upload games from the phone: tap **Games** on the controller page, then
-**Upload a ROM**. The TV stores it, switches to it, and phones stay connected.
-Any phone can pick another game from the same list.
+Upload games from the phone: tap **☰ Games** on the controller page, then
+**Upload a ROM** (`.sfc`, `.smc`, or a `.zip` containing one). The TV stores it
+and starts it; phones stay connected.
 
 ROMs live in `/sdcard/Android/data/dev.couchpad/files/roms/` (also reachable
 with `adb push` once the app has run and created the folder).
@@ -47,17 +51,23 @@ while any button is held.
 
 | Path | Role |
 | --- | --- |
-| `domain/` | Pure Kotlin: buttons, wire protocol, player slot assignment (unit tested) |
-| `server/` | Ktor CIO server: serves the gamepad page and the `/ws` endpoint |
-| `ui/` | TV activity, QR rendering, per-player panels |
-| `assets/controller.html` | Phone gamepad (multi-touch, auto-reconnect) |
+| `domain/` | Pure Kotlin: buttons, wire protocol, player slots, ROM library, lobby grid navigation (unit tested) |
+| `server/` | Ktor CIO server: gamepad page, `/ws`, game and screen endpoints |
+| `ControllerHub` | App-wide state: connected players, latency, pause, which screen is showing |
+| `ui/LobbyActivity` | Launcher: QR, players, game library |
+| `ui/GameActivity` | Emulator, pause overlay; Back returns to the lobby |
+| `assets/controller.html` | Phone gamepad: joystick, face buttons, games / pause menu |
 
 ## Protocol
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
 | Phone → TV | `d:<code>` / `u:<code>` | Button down / up |
+| Phone → TV | `t:<id>` | Ping, echoed back for round-trip time |
+| Phone → TV | `r:<avg>:<max>` | Latency report (ms) |
+| Phone → TV | `m:1` / `m:0` | Menu opened / closed: pauses / resumes the game |
 | TV → Phone | `p:<n>` | You are player *n* |
+| TV → Phone | `s:lobby` / `s:game` | Which screen the TV shows |
 | TV → Phone | `full` | No free slot |
 
 HTTP endpoints (all require `?token=`):
@@ -65,8 +75,11 @@ HTTP endpoints (all require `?token=`):
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/games` | One name per line; current game prefixed with `*` |
-| POST | `/games?name=<file>` | Raw ROM body, max 8 MB, `.sfc`/`.smc` only |
-| POST | `/play?name=<file>` | Switch the TV to that game |
+| POST | `/games?name=<file>` | Raw ROM body, max 8 MB, `.sfc`/`.smc`/`.zip` |
+| POST | `/play?name=<file>` | Start or switch to that game |
+| POST | `/lobby` | Leave the game, back to the lobby |
+| POST | `/reset` | Restart the current game |
+| POST | `/overlay` | Show / hide the QR panel over the game |
 
 Codes: `U D L R A B X Y SL SR ST SE`.
 

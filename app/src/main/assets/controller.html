@@ -116,6 +116,10 @@
   #msg { font-size:13px; color:var(--muted); min-height:1.2em; }
   #games { display:flex; flex-direction:column; gap:8px; }
   .note { font-size:12px; line-height:1.45; color:var(--muted); margin:2px 0 0; }
+  .pause { display:flex; flex-direction:column; gap:8px; margin-bottom:18px; padding-bottom:16px; border-bottom:1px solid rgba(255,255,255,.08); }
+  .pause[hidden] { display:none; }
+  .pause-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .pause-row .btn { justify-content:center; }
 </style>
 </head>
 <body>
@@ -129,12 +133,19 @@
   <div id="menu">
     <div class="sheet">
       <header>
-        <h2>Games <small id="version" style="font-size:11px;font-weight:500;color:var(--muted)"></small></h2>
+        <h2><span id="menuTitle">Games</span> <small id="version" style="font-size:11px;font-weight:500;color:var(--muted)"></small></h2>
         <button id="closeBtn" class="btn" type="button">Close</button>
       </header>
+      <section id="pauseSection" class="pause" hidden>
+        <button id="resumeBtn" class="btn primary" type="button">▶  Resume</button>
+        <div class="pause-row">
+          <button id="lobbyBtn" class="btn" type="button">⌂  Back to lobby</button>
+          <button id="resetBtn" class="btn" type="button">↻  Restart game</button>
+        </div>
+      </section>
       <div class="cols">
         <section>
-          <h3>On this TV</h3>
+          <h3 id="libraryTitle">On this TV</h3>
           <div id="msg"></div>
           <div id="games"></div>
           <label class="btn primary">＋ Upload a ROM (.sfc, .smc or .zip)<input id="file" type="file" hidden></label>
@@ -189,7 +200,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "7-fixed-stick";
+  const PAGE_VERSION = "8-lobby";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -231,10 +242,12 @@
   let pingTimer = null;
   let reportTimer = null;
 
+  let screen = "lobby";         // what the TV shows: "lobby" or "game"
+
   function showPlayer() {
     if (player === null) return;
     document.documentElement.style.setProperty("--player", PLAYER_COLORS[player] || "#7c5cff");
-    setStatus(`Player ${player}`, true);
+    setStatus(screen === "lobby" ? `Player ${player} · Lobby` : `Player ${player}`, true);
     if (lastRtt === null) return;
     rttEl.textContent = `${lastRtt} ms`;
     rttEl.className = "rtt " + (lastRtt < 30 ? "good" : lastRtt < 60 ? "fair" : "poor");
@@ -275,11 +288,13 @@
     socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}&id=${encodeURIComponent(clientId)}&v=${PAGE_VERSION}`);
     socket.onmessage = (e) => {
       if (e.data.startsWith("t:")) { onPong(Number(e.data.slice(2))); return; }
+      if (e.data.startsWith("s:")) { onScreen(e.data.slice(2)); return; }
       if (e.data === "full") { setStatus("Game is full"); return; }
       if (e.data.startsWith("p:")) { player = e.data.slice(2); showPlayer(); retryMs = 500; startPings(); }
     };
     socket.onclose = (e) => {
       stopPings();
+      menuPausing = false;      // the TV drops this phone's pause when it disconnects
       player = null;
       lastRtt = null;
       releaseAll();
@@ -472,11 +487,51 @@
     } catch { showMessage("Upload failed. Check the connection to the TV."); }
   }
 
-  function openMenu() { releaseAll(); showMessage(""); menu.classList.add("open"); if (!stale) loadGames(); }
-  function closeMenu() { menu.classList.remove("open"); }
+  // ---- Lobby vs. game: the menu doubles as the pause menu while a game runs ----
+  let menuPausing = false;      // this phone told the TV to pause (m:1) and owes it an m:0
+
+  function renderMenuMode() {
+    const inGame = screen === "game";
+    document.getElementById("menuTitle").textContent = inGame ? "Paused" : "Games";
+    document.getElementById("pauseSection").hidden = !inGame;
+    document.getElementById("libraryTitle").textContent = inGame ? "Switch game" : "On this TV";
+  }
+
+  function onScreen(value) {
+    const changed = value !== screen;
+    screen = value;
+    showPlayer();
+    // Someone started a game or went back to the lobby: this phone's open menu is now stale.
+    if (changed && menu.classList.contains("open")) closeMenu();
+  }
+
+  function openMenu() {
+    releaseAll();
+    showMessage("");
+    renderMenuMode();
+    menu.classList.add("open");
+    if (screen === "game") { send("m:1"); menuPausing = true; }
+    if (!stale) loadGames();
+  }
+
+  function closeMenu() {
+    menu.classList.remove("open");
+    if (menuPausing) { send("m:0"); menuPausing = false; }
+  }
+
+  async function tvAction(path, failure) {
+    try {
+      const response = await api(path, {}, { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      closeMenu();
+    } catch { showMessage(failure); }
+  }
 
   document.getElementById("menuBtn").addEventListener("click", openMenu);
   document.getElementById("closeBtn").addEventListener("click", closeMenu);
+  document.getElementById("resumeBtn").addEventListener("click", closeMenu);
+  document.getElementById("lobbyBtn").addEventListener("click", () => tvAction("/lobby", "Could not reach the TV."));
+  document.getElementById("resetBtn").addEventListener("click", () => tvAction("/reset", "Could not restart the game."));
   menu.addEventListener("click", (e) => { if (e.target === menu) closeMenu(); });
   document.getElementById("overlayBtn").addEventListener("click", async () => {
     try { await api("/overlay", {}, { method: "POST" }); closeMenu(); }
