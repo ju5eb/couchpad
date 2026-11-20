@@ -129,7 +129,7 @@
   <div id="menu">
     <div class="sheet">
       <header>
-        <h2>Games</h2>
+        <h2>Games <small id="version" style="font-size:11px;font-weight:500;color:var(--muted)"></small></h2>
         <button id="closeBtn" class="btn" type="button">Close</button>
       </header>
       <div class="cols">
@@ -188,6 +188,9 @@
 
 <script>
 (() => {
+  // Bump on every controller change: shown in the menu and logged by the TV on connect.
+  const PAGE_VERSION = "7-fixed-stick";
+  document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
   const statusTextEl = document.getElementById("statusText");
@@ -269,7 +272,7 @@
   }
 
   function connect() {
-    socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}&id=${encodeURIComponent(clientId)}`);
+    socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}&id=${encodeURIComponent(clientId)}&v=${PAGE_VERSION}`);
     socket.onmessage = (e) => {
       if (e.data.startsWith("t:")) { onPong(Number(e.data.slice(2))); return; }
       if (e.data === "full") { setStatus("Game is full"); return; }

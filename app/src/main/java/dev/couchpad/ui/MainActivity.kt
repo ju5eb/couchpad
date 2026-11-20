@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity(), ControllerHub.Listener {
                 Log.i(TAG, "latency player=${event.player} avg=${event.report.averageMs}ms max=${event.report.maxMs}ms")
                 return
             }
-            is ControllerEvent.Connected -> Unit
+            is ControllerEvent.Connected -> Log.i(TAG, "player ${event.player} connected, page version=${event.pageVersion ?: "unknown (old page)"}")
         }
         runOnUiThread { render(event) }
     }

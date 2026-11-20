@@ -13,6 +13,7 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -53,7 +54,11 @@ class ControllerServer(
                 timeout = 15.seconds
             }
             routing {
-                get("/") { call.respondText(controllerPage, ContentType.Text.Html) }
+                get("/") {
+                    // Never cache: phones must pick up a new controller page right after an update.
+                    call.response.header(HttpHeaders.CacheControl, "no-store")
+                    call.respondText(controllerPage, ContentType.Text.Html)
+                }
                 get("/games") { if (call.authorized()) call.listGames() }
                 post("/games") { if (call.authorized()) call.uploadGame() }
                 post("/play") { if (call.authorized()) call.playGame() }
@@ -125,7 +130,7 @@ class ControllerServer(
         }
 
         send(Frame.Text(ControllerProtocol.assigned(lease.player)))
-        onEvent(ControllerEvent.Connected(lease.player))
+        onEvent(ControllerEvent.Connected(lease.player, params["v"]?.take(32)))
         try {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
