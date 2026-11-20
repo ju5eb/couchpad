@@ -43,6 +43,16 @@ wall-clock pacing, restarts the game once, and from then on makes LibretroDroid
 see a 50 Hz display (`RefreshRateContext`) so it runs up to two emulated frames
 per draw. Check with `adb logcat -s Couchpad`.
 
+### Box art
+
+The lobby shows covers from
+[libretro-thumbnails](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System),
+downloaded by the TV once per game and cached in its private storage (never
+committed). Covers are matched by No-Intro name; `BoxArtNames` also maps
+GoodTools tags (`(J)` → `(Japan)`), strips junk and tries shorter titles. A
+definitive miss is remembered for 3 days; network errors are retried. Games
+without a cover keep the coloured card.
+
 For testing, `ControllerLatency.sfc` from
 [PeterLemon/SNES](https://github.com/PeterLemon/SNES) flashes the screen white
 while any button is held.

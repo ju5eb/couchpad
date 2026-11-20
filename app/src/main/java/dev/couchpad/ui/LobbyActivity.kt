@@ -1,6 +1,8 @@
 package dev.couchpad.ui
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -16,12 +18,18 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
 import dev.couchpad.ControllerHub
+import dev.couchpad.boxart.BoxArtStore
 import dev.couchpad.CouchpadApp
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.GridNavigator
 import dev.couchpad.server.LocalAddress
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 
 /**
@@ -37,6 +45,7 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
     private var games: List<String> = emptyList()
     private var selected = 0
     private val navigator = GridNavigator(COLUMNS)
+    private val boxArt by lazy { BoxArtStore(File(filesDir, "boxart")) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,13 +147,24 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
         val hue = (abs(title.hashCode()) % 360).toFloat()
         val top = Color.HSVToColor(floatArrayOf(hue, 0.55f, 0.62f))
         val bottom = Color.HSVToColor(floatArrayOf((hue + 30) % 360, 0.65f, 0.28f))
+        val art = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0f
+        }
+        val initials = text(initials(title), 54f, Color.argb(70, 255, 255, 255), bold = true)
         return FrameLayout(this).apply {
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(top, bottom)).apply { cornerRadius = 16.dp.toFloat() }
             foreground = GradientDrawable().apply { cornerRadius = 16.dp.toFloat(); setColor(Color.TRANSPARENT) }
             clipToOutline = true
-            addView(text(initials(title), 54f, Color.argb(70, 255, 255, 255), bold = true), FrameLayout.LayoutParams(
+            addView(art, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            // Darkens the bottom so the title stays readable over any box art.
+            addView(View(context).apply {
+                background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(210, 0, 0, 0), Color.TRANSPARENT))
+            }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (CARD_H * 0.6f).toInt().dp, Gravity.BOTTOM))
+            addView(initials, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
             ).apply { setMargins(0, 2.dp, 12.dp, 0) })
+            loadBoxArt(file, art, initials)
             addView(text(title, 17f, Color.WHITE, bold = true).apply {
                 maxLines = 2
                 setShadowLayer(6f, 0f, 2f, Color.argb(160, 0, 0, 0))
@@ -161,6 +181,28 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
                 ).apply { setMargins(12.dp, 12.dp, 0, 0) })
             }
         }
+    }
+
+    /** Downloads (once) and fades in the cover; the coloured card stays if there is none. */
+    private fun loadBoxArt(rom: String, target: ImageView, initials: View) {
+        lifecycleScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching { boxArt.fetch(rom)?.let { decodeScaled(it, CARD_W.dp) } }.getOrNull()
+            } ?: return@launch
+            target.setImageBitmap(bitmap)
+            target.animate().alpha(1f).setDuration(250).start()
+            initials.visibility = View.GONE
+        }
+    }
+
+    /** Decodes at roughly [targetWidth] px so covers do not eat the TV's 1 GB of RAM. */
+    private fun decodeScaled(file: File, targetWidth: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= targetWidth) sample *= 2
+        return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     private fun initials(title: String) = title.split(Regex("\\s+"))
