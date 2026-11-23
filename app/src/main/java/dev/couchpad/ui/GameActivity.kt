@@ -54,7 +54,9 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Ask the TV for its game mode: skips picture processing that adds tens of ms of lag.
-        window.attributes = window.attributes.apply { preferMinimalPostProcessing = true }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply { preferMinimalPostProcessing = true }
+        }
         hub = (application as CouchpadApp).hub
 
         val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
@@ -84,7 +86,11 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
     /** Held while the game screen is visible: Wi-Fi power save causes 100 ms input spikes. */
     private val wifiLock by lazy {
         getSystemService(WifiManager::class.java)
-            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "couchpad:input")
+            .createWifiLock(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                else WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "couchpad:input",
+            )
             .apply { setReferenceCounted(false) }
     }
 
