@@ -15,6 +15,7 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.receive
+import io.ktor.server.plugins.origin
 import io.ktor.server.response.header
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -50,6 +51,8 @@ class ControllerServer(
     private val onResetGame: () -> Unit,
     /** Message telling a phone which screen the TV shows (`s:lobby` / `s:game`). */
     private val currentScreen: () -> String,
+    /** Message telling a phone where the TV is on each network (`n:…`). */
+    private val currentNetwork: () -> String,
 ) {
     private var server: EmbeddedServer<*, *>? = null
     private val sessions = ConcurrentHashMap<Lease, DefaultWebSocketServerSession>()
@@ -72,6 +75,12 @@ class ControllerServer(
                     call.respondText(controllerPage, ContentType.Text.Html)
                 }
                 // Diagnostics for devices without adb: last uncaught exception plus device info.
+                // Phones on the home Wi-Fi poll this on the TV's own network to know when they can switch.
+                get("/ping") {
+                    call.response.header(HttpHeaders.AccessControlAllowOrigin, "*")
+                    call.response.header(HttpHeaders.CacheControl, "no-store")
+                    call.respondText("ok")
+                }
                 get("/crash") {
                     call.response.header(HttpHeaders.CacheControl, "no-store")
                     call.respondText(dev.couchpad.CrashLog.read() ?: "no crash recorded", ContentType.Text.Plain)
@@ -164,18 +173,21 @@ class ControllerServer(
 
         send(Frame.Text(ControllerProtocol.assigned(lease.player)))
         send(Frame.Text(currentScreen()))
+        send(Frame.Text(currentNetwork()))
         sessions[lease] = this
-        onEvent(ControllerEvent.Connected(lease.player, params["v"]?.take(32)))
+        onEvent(ControllerEvent.Connected(lease.player, params["v"]?.take(32), call.request.origin.remoteHost))
         try {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val text = frame.readText()
                 val change = ControllerProtocol.parse(text)
                 val menu = ControllerProtocol.parseMenu(text)
+                val fastJoin = ControllerProtocol.parseFastJoin(text)
                 when {
                     change != null -> onEvent(ControllerEvent.Button(lease.player, change))
                     ControllerProtocol.isPing(text) -> send(Frame.Text(text))
                     menu != null -> onEvent(ControllerEvent.Menu(lease.player, menu))
+                    fastJoin != null -> onEvent(ControllerEvent.FastJoin(lease.player, fastJoin))
                     else -> ControllerProtocol.parseLatencyReport(text)
                         ?.let { onEvent(ControllerEvent.Latency(lease.player, it)) }
                 }

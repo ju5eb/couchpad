@@ -35,6 +35,31 @@ class ControllerProtocolTest {
     }
 
     @Test
+    fun `parses fast join requests`() {
+        assertEquals(true, ControllerProtocol.parseFastJoin("f:1"))
+        assertEquals(false, ControllerProtocol.parseFastJoin("f:0"))
+        assertNull(ControllerProtocol.parseFastJoin("f:x"))
+    }
+
+    @Test
+    fun `encodes network info with escaping, or empty when off`() {
+        assertEquals(
+            "n:direct=192.168.162.251&home=192.168.1.14&ssid=AndroidShare_1&pass=a%26b%20c",
+            ControllerProtocol.networkInfo("192.168.162.251", "192.168.1.14", "AndroidShare_1", "a&b c"),
+        )
+        assertEquals("n:", ControllerProtocol.networkInfo(null, "192.168.1.14", "x", "y"))
+        assertEquals("n:direct=10.0.0.1", ControllerProtocol.networkInfo("10.0.0.1", null, null, null))
+    }
+
+    @Test
+    fun `detects hosts on the same network`() {
+        assertEquals(true, ControllerProtocol.sameSubnet("192.168.162.62", "192.168.162.251"))
+        assertEquals(false, ControllerProtocol.sameSubnet("192.168.1.9", "192.168.162.251"))
+        assertEquals(false, ControllerProtocol.sameSubnet(null, "192.168.162.251"))
+        assertEquals(false, ControllerProtocol.sameSubnet("::1", "192.168.162.251"))
+    }
+
+    @Test
     fun `parses latency reports`() {
         assertEquals(LatencyReport(12, 40), ControllerProtocol.parseLatencyReport("r:12:40"))
         listOf("r:12", "r:a:b", "r:50:10", "r:-1:5", "x:1:2").forEach {

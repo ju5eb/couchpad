@@ -26,6 +26,34 @@ object ControllerProtocol {
         else -> null
     }
 
+    /** `f:1` = the player wants the TV to show how to join its own Wi-Fi, `f:0` = cancel. */
+    fun parseFastJoin(message: String): Boolean? = when (message) {
+        "f:1" -> true
+        "f:0" -> false
+        else -> null
+    }
+
+    /**
+     * Tells phones where the TV is on each network so they can move to the
+     * faster one by themselves: `n:direct=…&home=…&ssid=…&pass=…`, or `n:` when
+     * the TV's own Wi-Fi is off.
+     */
+    fun networkInfo(direct: String?, home: String?, ssid: String?, password: String?): String {
+        if (direct == null) return "n:"
+        val fields = listOf("direct" to direct, "home" to home, "ssid" to ssid, "pass" to password)
+            .filter { it.second != null }
+            .joinToString("&") { (key, value) -> "$key=${java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")}" }
+        return "n:$fields"
+    }
+
+    /** Whether [host] is on the same /24 network as [network], e.g. a phone on the TV's own Wi-Fi. */
+    fun sameSubnet(host: String?, network: String?): Boolean {
+        if (host == null || network == null) return false
+        val a = host.split('.')
+        val b = network.split('.')
+        return a.size == 4 && b.size == 4 && a.take(3) == b.take(3)
+    }
+
     fun parse(message: String): ButtonChange? {
         val separator = message.indexOf(':')
         if (separator != 1) return null

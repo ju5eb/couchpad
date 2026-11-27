@@ -29,6 +29,19 @@
   #status.ok .dot { background:var(--player); box-shadow:0 0 10px var(--player); }
   #status .rtt { font-variant-numeric:tabular-nums; font-weight:500; color:var(--muted); }
   #status .rtt.good { color:var(--ok); } #status .rtt.fair { color:var(--warn); } #status .rtt.poor { color:var(--bad); }
+  #fastBtn { padding:7px 12px; border:1px solid rgba(250,204,21,.5); border-radius:999px; background:rgba(250,204,21,.12); color:#fde68a; font:inherit; font-size:13px; font-weight:700; }
+  #fastBtn[hidden] { display:none; }
+  #fast { position:fixed; inset:0; z-index:6; display:none; background:rgba(8,8,12,.72); backdrop-filter:blur(6px); touch-action:pan-y; }
+  #fast.open { display:flex; }
+  #fast .sheet { margin:auto; width:min(560px, calc(100% - 24px)); max-height:calc(100% - 24px); overflow-y:auto; background:#17171f;
+    border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:18px; display:flex; flex-direction:column; gap:10px; }
+  #fast h2 { margin:0; font-size:18px; }
+  #fast p { margin:0; font-size:14px; line-height:1.45; color:#d4d4e0; }
+  #fast .row { display:flex; align-items:center; gap:8px; font-size:14px; }
+  #fast .row span { width:72px; color:var(--muted); }
+  #fast input { flex:1; min-width:0; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.1); background:#20202b; color:var(--text); font:inherit; -webkit-user-select:text; user-select:text; }
+  #fast .actions { display:flex; gap:8px; }
+  #fastStatus { font-size:13px; color:var(--warn); }
   #menuBtn { display:flex; align-items:center; gap:6px; padding:7px 14px; border:0; border-radius:999px; background:var(--accent); color:#fff; font:inherit; font-size:13px; font-weight:600; box-shadow:0 4px 14px rgba(124,92,255,.35); }
 
   /* ---------- Shoulders ---------- */
@@ -162,7 +175,21 @@
 
   <div id="bar">
     <div id="status"><span class="dot"></span><span id="statusText">Connecting…</span><span class="rtt" id="rtt"></span></div>
+    <button id="fastBtn" type="button" hidden>⚡ Faster</button>
     <button id="menuBtn" type="button">☰ Menu</button>
+  </div>
+
+  <div id="fast">
+    <div class="sheet">
+      <h2>⚡ Faster connection</h2>
+      <p>The TV is now showing a code. <b>Scan it with your phone's camera</b> to join the TV's own Wi-Fi.</p>
+      <p>If the phone says the network has <b>no internet</b>, choose <b>"Keep connection"</b> or <b>"Use anyway"</b>.</p>
+      <p>Then come back here and leave this page open: the controller switches by itself.</p>
+      <div class="row"><span>Wi-Fi</span><b id="fastSsid"></b></div>
+      <div class="row"><span>Password</span><input id="fastPass" readonly><button id="copyPass" class="btn" type="button" style="width:auto">Copy</button></div>
+      <div id="fastStatus">Waiting for the phone to join the TV's Wi-Fi…</div>
+      <div class="actions"><button id="fastCancel" class="btn" type="button">Cancel</button></div>
+    </div>
   </div>
 
   <div id="menu">
@@ -260,7 +287,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "9-settings";
+  const PAGE_VERSION = "10-fast";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -276,12 +303,15 @@
   const PLAYER_COLORS = { 1: "#ff6b6b", 2: "#4dabf7" };
   let stale = false;
 
+  /** The id keeps this phone's player slot; it travels in the URL when moving between networks. */
   function loadClientId() {
+    const fromUrl = new URLSearchParams(location.search).get("id");
     try {
-      let id = localStorage.getItem("couchpad-id");
-      if (!id) { id = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("couchpad-id", id); }
+      let id = fromUrl || localStorage.getItem("couchpad-id");
+      if (!id) id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem("couchpad-id", id);
       return id;
-    } catch { return Math.random().toString(36).slice(2); }
+    } catch { return fromUrl || Math.random().toString(36).slice(2); }
   }
 
   function setStatus(text, ok) {
@@ -307,7 +337,8 @@
   function showPlayer() {
     if (player === null) return;
     document.documentElement.style.setProperty("--player", PLAYER_COLORS[player] || "#7c5cff");
-    setStatus(screen === "lobby" ? `Player ${player} · Lobby` : `Player ${player}`, true);
+    const label = `${onDirect() ? "⚡ " : ""}Player ${player}`;
+    setStatus(screen === "lobby" ? `${label} · Lobby` : label, true);
     if (lastRtt === null) return;
     rttEl.textContent = `${lastRtt} ms`;
     rttEl.className = "rtt " + (lastRtt < 30 ? "good" : lastRtt < 60 ? "fair" : "poor");
@@ -349,21 +380,88 @@
     socket.onmessage = (e) => {
       if (e.data.startsWith("t:")) { onPong(Number(e.data.slice(2))); return; }
       if (e.data.startsWith("s:")) { onScreen(e.data.slice(2)); return; }
+      if (e.data.startsWith("n:")) { onNetwork(e.data.slice(2)); return; }
       if (e.data === "full") { setStatus("Game is full"); return; }
-      if (e.data.startsWith("p:")) { player = e.data.slice(2); showPlayer(); retryMs = 500; startPings(); }
+      if (e.data.startsWith("p:")) { player = e.data.slice(2); showPlayer(); renderFastButton(); retryMs = RETRY_MIN_MS; failures = 0; startPings(); }
     };
-    socket.onclose = (e) => {
+    socket.onclose = async (e) => {
       stopPings();
       menuPausing = false;      // the TV drops this phone's pause when it disconnects
       player = null;
       lastRtt = null;
       releaseAll();
+      renderFastButton();
       if (e.code === POLICY_VIOLATION) { stale = true; setStatus(STALE_QR); return; }
       setStatus("Reconnecting…");
+      failures++;
+      // The phone may have changed Wi-Fi: follow the TV to whichever network now reaches it.
+      if (await moveToReachableNetwork()) return;
       setTimeout(connect, retryMs);
-      retryMs = Math.min(retryMs * 2, 5000);
+      retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
     };
   }
+
+  // ---- Faster connection: the TV's own Wi-Fi -------------------------------
+  // The TV tells us its address on both networks (n:direct=…&home=…&ssid=…&pass=…).
+  // A page cannot switch the phone's Wi-Fi, but it can notice when the TV becomes
+  // reachable on the other network and move there, keeping the player slot.
+  const RETRY_MIN_MS = 300;
+  const RETRY_MAX_MS = 2000;
+  const NET_KEY = "couchpad-net";
+  let failures = 0;
+  let net = loadNet();
+  let probeTimer = null;
+
+  function loadNet() {
+    try { return JSON.parse(localStorage.getItem(NET_KEY) || "null"); } catch { return null; }
+  }
+
+  const port = () => location.port || "8080";
+  const onDirect = () => !!net && location.hostname === net.direct;
+
+  function onNetwork(payload) {
+    const p = new URLSearchParams(payload);
+    net = p.get("direct") ? { direct: p.get("direct"), home: p.get("home"), ssid: p.get("ssid"), pass: p.get("pass") } : null;
+    try { localStorage.setItem(NET_KEY, JSON.stringify(net)); } catch { /* keep in memory */ }
+    renderFastButton();
+    showPlayer();
+  }
+
+  async function reachable(host) {
+    if (!host) return false;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1200);
+    try {
+      const response = await fetch(`http://${host}:${port()}/ping`, { cache: "no-store", signal: ctrl.signal });
+      return response.ok;
+    } catch { return false; } finally { clearTimeout(timer); }
+  }
+
+  /** Same player and same control settings on the other address (each address has its own storage). */
+  function moveTo(host) {
+    const query = new URLSearchParams({ t: token, id: clientId, cfg: JSON.stringify(settings) });
+    location.replace(`http://${host}:${port()}/?${query}`);
+  }
+
+  /** After a drop: on the TV's Wi-Fi, fall back to home once it is gone; on home, jump to the TV's Wi-Fi if it is there. */
+  async function moveToReachableNetwork() {
+    if (!net) return false;
+    if (onDirect()) {
+      if (failures >= 2 && net.home && await reachable(net.home)) { moveTo(net.home); return true; }
+      return false;
+    }
+    if (await reachable(net.direct)) { moveTo(net.direct); return true; }
+    return false;
+  }
+
+  function startProbe() {
+    stopProbe();
+    probeTimer = setInterval(async () => {
+      if (net && !onDirect() && await reachable(net.direct)) { stopProbe(); moveTo(net.direct); }
+    }, 1500);
+  }
+
+  function stopProbe() { clearInterval(probeTimer); probeTimer = null; }
 
   function send(msg) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(msg); }
 
@@ -382,6 +480,9 @@
 
   function loadSettings() {
     try {
+      // Settings carried over in the URL when the page moved to the TV's other network.
+      const carried = new URLSearchParams(location.search).get("cfg");
+      if (carried) localStorage.setItem(SETTINGS_KEY, carried);
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
       const merged = { ...DEFAULT_SETTINGS };
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -490,7 +591,7 @@
   function mark(b, on) { document.querySelectorAll(`[data-b="${b}"]`).forEach(el => el.classList.toggle("on", on)); }
 
   // Taps on the bar and the games menu behave like a normal page, not like the gamepad.
-  const isMenuUi = (e) => e.target instanceof Element && !!e.target.closest("#bar, #menu");
+  const isMenuUi = (e) => e.target instanceof Element && !!e.target.closest("#bar, #menu, #fast");
   const track = (e) => {
     if (isMenuUi(e)) return;
     e.preventDefault();
@@ -619,6 +720,43 @@
       closeMenu();
     } catch { showMessage(failure); }
   }
+
+  // ---- ⚡ button and sheet ----
+  const fastEl = document.getElementById("fast");
+  const fastBtn = document.getElementById("fastBtn");
+
+  /** Only offered while the TV's Wi-Fi is up, we are connected, and not already on it. */
+  function renderFastButton() {
+    fastBtn.hidden = !(net && player !== null && !onDirect());
+  }
+
+  function openFast() {
+    if (!net) return;
+    releaseAll();
+    document.getElementById("fastSsid").textContent = net.ssid || "";
+    document.getElementById("fastPass").value = net.pass || "";
+    fastEl.classList.add("open");
+    send("f:1");                                    // the TV shows its Wi-Fi QR and the steps
+    if (screen === "game" && !menuPausing) { send("m:1"); menuPausing = true; }
+    startProbe();
+  }
+
+  function closeFast() {
+    fastEl.classList.remove("open");
+    stopProbe();
+    send("f:0");
+    if (menuPausing && !menu.classList.contains("open")) { send("m:0"); menuPausing = false; }
+  }
+
+  fastBtn.addEventListener("click", openFast);
+  document.getElementById("fastCancel").addEventListener("click", closeFast);
+  document.getElementById("copyPass").addEventListener("click", () => {
+    const input = document.getElementById("fastPass");
+    input.select();
+    // navigator.clipboard needs HTTPS; execCommand still works on a plain-http LAN page.
+    const copied = document.execCommand && document.execCommand("copy");
+    document.getElementById("copyPass").textContent = copied ? "Copied" : "Select & copy";
+  });
 
   document.getElementById("menuBtn").addEventListener("click", openMenu);
   document.getElementById("closeBtn").addEventListener("click", closeMenu);

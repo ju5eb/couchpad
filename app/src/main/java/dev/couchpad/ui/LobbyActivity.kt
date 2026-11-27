@@ -52,6 +52,7 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
     private val navigator = GridNavigator(COLUMNS)
     private val boxArt by lazy { BoxArtStore(File(filesDir, "boxart")) }
     private lateinit var joinPanel: LinearLayout
+    private lateinit var fastJoinPanel: FastJoinPanel
     private var askedForWifiPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +69,7 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
         refreshGames()
         refreshPlayers()
         renderJoinPanel(hub.directNetwork.state)
+        refreshFastJoin()
         startDirectNetwork()
     }
 
@@ -223,7 +225,8 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
     private fun refreshPlayers() {
         val connected = hub.connectedPlayers()
         val latencies = hub.latencies()
-        playerRows.forEach { (player, row) -> row.update(player in connected, latencies[player]) }
+        val direct = hub.directPlayers()
+        playerRows.forEach { (player, row) -> row.update(player in connected, latencies[player], player in direct) }
     }
 
     // ---- Layout ------------------------------------------------------------
@@ -261,37 +264,31 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
             addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
 
-        return LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.rgb(28, 26, 44), Color.rgb(12, 12, 18)))
             setPadding(48.dp, 36.dp, 40.dp, 0)
             addView(left, LinearLayout.LayoutParams(250.dp, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { leftMargin = 32.dp })
         }
+        fastJoinPanel = FastJoinPanel(this)
+        return FrameLayout(this).apply {
+            addView(content)
+            addView(fastJoinPanel)
+        }
     }
 
     // ---- Joining ----------------------------------------------------------
 
     /**
-     * With the TV's own Wi-Fi up: two QRs, join that network then open the
-     * controller. Otherwise: the single home-network QR as before.
+     * One QR: the controller on the home Wi-Fi, so anyone can play right away.
+     * The TV's own Wi-Fi is an opt-in upgrade from the phone ("⚡ Faster
+     * connection"), which brings up [FastJoinPanel].
      */
     private fun renderJoinPanel(state: TvHotspot.State) {
         joinPanel.removeAllViews()
         val hotspotAddress = (state as? TvHotspot.State.On)?.info?.address
         val homeUrl = LocalAddress.find(exclude = setOfNotNull(hotspotAddress))?.let(::controllerUrl)
-        if (state is TvHotspot.State.On) {
-            val info = state.info
-            joinPanel.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(qrStep("1 · Join TV Wi-Fi", info.joinQr), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = 12.dp })
-                addView(qrStep("2 · Open controller", controllerUrl(info.address)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            })
-            joinPanel.addView(text("Wi-Fi  ${info.ssid}", 13f, Color.WHITE, bold = true).apply { setPadding(0, 12.dp, 0, 0) })
-            info.password?.let { joinPanel.addView(text("Password  $it", 13f, Color.WHITE)) }
-            homeUrl?.let { joinPanel.addView(text("On home Wi-Fi instead: $it", 10f, MUTED).apply { setPadding(0, 6.dp, 0, 0) }) }
-            return
-        }
         if (homeUrl == null) {
             joinPanel.addView(text("No network.\nConnect the TV to Wi-Fi.", 16f, Color.WHITE))
             return
@@ -300,17 +297,19 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
         joinPanel.addView(text("Scan to join", 16f, Color.WHITE, bold = true).apply { setPadding(0, 12.dp, 0, 0) })
         joinPanel.addView(text(homeUrl, 11f, MUTED))
         val note = when (state) {
+            is TvHotspot.State.On -> "⚡ Lag? Tap ⚡ on your phone for a direct connection."
             TvHotspot.State.Starting -> "Starting the TV's own Wi-Fi…"
             is TvHotspot.State.Failed -> "TV Wi-Fi unavailable: ${state.reason}"
             else -> null
         }
-        note?.let { joinPanel.addView(text(it, 11f, MUTED).apply { setPadding(0, 6.dp, 0, 0) }) }
+        note?.let { joinPanel.addView(text(it, 11f, if (state is TvHotspot.State.On) Color.WHITE else MUTED).apply { setPadding(0, 8.dp, 0, 0) }) }
     }
 
-    private fun qrStep(caption: String, content: String) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(qrCard(content, 102))
-        addView(text(caption, 12f, Color.WHITE, bold = true).apply { setPadding(0, 8.dp, 0, 0) })
+    private fun refreshFastJoin() = fastJoinPanel.update(hub.directNetworkInfo(), hub.fastJoinRequests())
+
+    override fun onFastJoinChanged() = runOnUiThread {
+        refreshFastJoin()
+        refreshPlayers()
     }
 
     private fun qrCard(content: String, sizeDp: Int) = FrameLayout(this).apply {
@@ -321,7 +320,10 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
 
     private fun controllerUrl(host: String) = "http://$host:${ControllerHub.PORT}/?t=${hub.token}"
 
-    override fun onDirectNetworkChanged(state: TvHotspot.State) = renderJoinPanel(state)
+    override fun onDirectNetworkChanged(state: TvHotspot.State) {
+        renderJoinPanel(state)
+        refreshFastJoin()
+    }
 
     /** The TV's Wi-Fi needs the "nearby Wi-Fi devices" permission on Android 13+. */
     private fun startDirectNetwork() {
@@ -373,15 +375,16 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
             update(connected = false, latencyMs = null)
         }
 
-        fun update(connected: Boolean, latencyMs: Int?) {
+        fun update(connected: Boolean, latencyMs: Int?, direct: Boolean = false) {
             dot.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(if (connected) dotColor else Color.rgb(70, 70, 90))
             }
+            val via = if (direct) "⚡ " else ""
             status.text = when {
                 !connected -> "waiting…"
-                latencyMs == null -> "connected"
-                else -> "$latencyMs ms"
+                latencyMs == null -> "${via}connected"
+                else -> "$via$latencyMs ms"
             }
             status.setTextColor(when {
                 !connected -> MUTED

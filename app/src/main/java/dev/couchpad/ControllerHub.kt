@@ -8,8 +8,11 @@ import dev.couchpad.domain.PlayerSlots
 import dev.couchpad.domain.RomLibrary
 import dev.couchpad.network.TvHotspot
 import dev.couchpad.server.ControllerServer
+import dev.couchpad.server.LocalAddress
 import java.io.File
 import java.security.SecureRandom
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * App-wide controller state. Lives for the whole process so phones stay
@@ -27,6 +30,8 @@ class ControllerHub(context: Context) {
         fun onPauseChanged(paused: Boolean) = Unit
         /** Called on the main thread when the TV's own Wi-Fi network changes state. */
         fun onDirectNetworkChanged(state: TvHotspot.State) = Unit
+        /** Called on a network thread when who asked for / who is on the faster connection changes. */
+        fun onFastJoinChanged() = Unit
     }
 
     /** The TV's own Wi-Fi for controllers; lives as long as the app so its password stays stable. */
@@ -35,7 +40,25 @@ class ControllerHub(context: Context) {
     /** Starts the TV's Wi-Fi once (Android 13+); safe to call again. */
     fun startDirectNetwork() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        directNetwork.start { state -> listener?.onDirectNetworkChanged(state) }
+        directNetwork.start { state ->
+            server.broadcast(networkMessage())
+            listener?.onDirectNetworkChanged(state)
+        }
+    }
+
+    /** The TV's own Wi-Fi details while it is up. */
+    fun directNetworkInfo(): TvHotspot.Info? = (directNetwork.state as? TvHotspot.State.On)?.info
+
+    /** Players who asked the TV to show how to join its own Wi-Fi and are not on it yet. */
+    fun fastJoinRequests(): Set<Int> = synchronized(lock) { fastJoinRequests.toSet() }
+
+    /** Players whose phone is connected through the TV's own Wi-Fi. */
+    fun directPlayers(): Set<Int> = synchronized(lock) { directPlayers.toSet() }
+
+    private fun networkMessage(): String {
+        val info = directNetworkInfo()
+        val home = LocalAddress.find(exclude = setOfNotNull(info?.address))
+        return ControllerProtocol.networkInfo(info?.address, home, info?.ssid, info?.password)
     }
 
     private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)
@@ -75,6 +98,10 @@ class ControllerHub(context: Context) {
     private val connectedPlayers = mutableSetOf<Int>()
     private val playersInMenu = mutableSetOf<Int>()
     private val latencies = mutableMapOf<Int, Int>()
+    private val fastJoinRequests = mutableSetOf<Int>()
+    private val fastJoinRequestedAt = mutableMapOf<Int, Long>()
+    private val directPlayers = mutableSetOf<Int>()
+    private val expiry = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "fast-join-expiry").apply { isDaemon = true } }
 
     private val server = ControllerServer(
         port = PORT,
@@ -89,6 +116,7 @@ class ControllerHub(context: Context) {
         onReturnToLobby = { listener?.onReturnToLobby() },
         onResetGame = { listener?.onResetGame() },
         currentScreen = ::screenMessage,
+        currentNetwork = ::networkMessage,
     )
 
     fun start() = server.start()
@@ -121,24 +149,58 @@ class ControllerHub(context: Context) {
 
     private fun dispatch(event: ControllerEvent) {
         var pauseChanged: Boolean? = null
+        var fastJoinChanged = false
         synchronized(lock) {
             val wasPaused = playersInMenu.isNotEmpty()
+            val before = fastJoinRequests.toSet() to directPlayers.toSet()
             when (event) {
-                is ControllerEvent.Connected -> connectedPlayers += event.player
+                is ControllerEvent.Connected -> {
+                    connectedPlayers += event.player
+                    // Arriving through the TV's own Wi-Fi fulfils a pending "faster connection" request.
+                    if (ControllerProtocol.sameSubnet(event.remoteHost, directNetworkInfo()?.address)) {
+                        directPlayers += event.player
+                        fastJoinRequests -= event.player
+                    } else {
+                        directPlayers -= event.player
+                    }
+                }
+                // A pending request survives the disconnect: the phone is probably switching networks.
                 is ControllerEvent.Disconnected -> {
                     connectedPlayers -= event.player
                     playersInMenu -= event.player
                     latencies -= event.player
+                    directPlayers -= event.player
                 }
                 is ControllerEvent.Menu -> if (event.open && inGame) playersInMenu += event.player else playersInMenu -= event.player
                 is ControllerEvent.Latency -> latencies[event.player] = event.report.averageMs
+                is ControllerEvent.FastJoin -> if (event.show) {
+                    fastJoinRequests += event.player
+                    fastJoinRequestedAt[event.player] = System.currentTimeMillis()
+                    expiry.schedule(::expireFastJoins, FAST_JOIN_TTL_MS + 500, TimeUnit.MILLISECONDS)
+                } else {
+                    fastJoinRequests -= event.player
+                }
                 is ControllerEvent.Button -> Unit
             }
             val paused = playersInMenu.isNotEmpty()
             if (paused != wasPaused) pauseChanged = paused
+            fastJoinChanged = before != (fastJoinRequests.toSet() to directPlayers.toSet())
         }
         listener?.onControllerEvent(event)
         pauseChanged?.let { listener?.onPauseChanged(it) }
+        if (fastJoinChanged) listener?.onFastJoinChanged()
+    }
+
+    /**
+     * A request survives a disconnect (the phone is switching networks) but not
+     * forever: if the phone never shows up on the TV's Wi-Fi, the panel goes away.
+     */
+    private fun expireFastJoins() {
+        val now = System.currentTimeMillis()
+        val changed = synchronized(lock) {
+            fastJoinRequests.removeAll { now - (fastJoinRequestedAt[it] ?: 0L) >= FAST_JOIN_TTL_MS }
+        }
+        if (changed) listener?.onFastJoinChanged()
     }
 
     /** Leaving the game drops every pending pause. */
@@ -157,6 +219,7 @@ class ControllerHub(context: Context) {
     companion object {
         const val PORT = 8080
         const val MAX_PLAYERS = 2
+        private const val FAST_JOIN_TTL_MS = 2 * 60 * 1000L
         private const val KEY_GAME = "selected_game"
         private const val KEY_TOKEN = "token"
         // v2: re-measure once now that game mode lets the TV draw 60 fps.

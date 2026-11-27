@@ -49,6 +49,7 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
     private lateinit var statusLabel: TextView
     private lateinit var overlay: View
     private lateinit var pauseOverlay: View
+    private lateinit var fastJoinPanel: FastJoinPanel
     private var emulationPaused = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,7 +61,9 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         }
         hub = (application as CouchpadApp).hub
 
-        val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
+        // Home-network address: the TV's own Wi-Fi is joined through the phone's ⚡ button instead.
+        val url = LocalAddress.find(exclude = setOfNotNull(hub.directNetworkInfo()?.address))
+            ?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         statusLabel = label("", 16f)
         overlay = buildOverlay(url)
@@ -71,6 +74,9 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         ))
         pauseOverlay = buildPauseOverlay()
         root.addView(pauseOverlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        fastJoinPanel = FastJoinPanel(this)
+        root.addView(fastJoinPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        fastJoinPanel.update(hub.directNetworkInfo(), hub.fastJoinRequests())
         setContentView(root)
 
         val game = hub.library.resolve(hub.selectedGame)
@@ -155,6 +161,14 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         retroView?.reset()
     }
 
+    override fun onFastJoinChanged() {
+        runOnUiThread { fastJoinPanel.update(hub.directNetworkInfo(), hub.fastJoinRequests()) }
+    }
+
+    override fun onDirectNetworkChanged(state: dev.couchpad.network.TvHotspot.State) {
+        fastJoinPanel.update(hub.directNetworkInfo(), hub.fastJoinRequests())
+    }
+
     override fun onPauseChanged(paused: Boolean) {
         runOnUiThread { applyPause(paused) }
     }
@@ -211,7 +225,7 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
             is ControllerEvent.Button -> if (!event.change.pressed || !hub.isPaused()) {
                 sendKey(event.change.button, event.change.pressed, port)
             }
-            is ControllerEvent.Menu -> return
+            is ControllerEvent.Menu, is ControllerEvent.FastJoin -> return
             is ControllerEvent.Disconnected -> ControllerButton.entries.forEach { sendKey(it, pressed = false, port = port) }
             is ControllerEvent.Latency -> {
                 Log.i(TAG, "latency player=${event.player} avg=${event.report.averageMs}ms max=${event.report.maxMs}ms")
@@ -341,7 +355,7 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
             }
             is ControllerEvent.Disconnected -> panels[event.player]?.setConnected(false)
             is ControllerEvent.Button -> panels[event.player]?.setPressed(event.change.button, event.change.pressed)
-            is ControllerEvent.Latency, is ControllerEvent.Menu -> Unit
+            is ControllerEvent.Latency, is ControllerEvent.Menu, is ControllerEvent.FastJoin -> Unit
         }
     }
 

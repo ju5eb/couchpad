@@ -43,6 +43,19 @@ wall-clock pacing, restarts the game once, and from then on makes LibretroDroid
 see a 50 Hz display (`RefreshRateContext`) so it runs up to two emulated frames
 per draw. Check with `adb logcat -s Couchpad`.
 
+### Faster connection (the TV's own Wi-Fi)
+
+Phones join with one QR on the home Wi-Fi and can play right away. When the TV
+supports it (Android 13+, STA + AP concurrency), it also runs a local-only
+hotspot. Tapping **⚡ Faster** on the phone shows that network's join QR and
+steps on the TV; once the phone joins, the page notices the TV is reachable
+there (`GET /ping`) and moves itself to that address, keeping its player slot
+and control settings. If the TV's network goes away, it moves back to the
+home address. A request that is never completed expires after 2 minutes.
+
+Phones may leave a Wi-Fi without internet: accept "keep connection" when
+asked, or turn mobile data off while playing.
+
 ### Box art
 
 The lobby shows covers from
