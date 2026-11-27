@@ -140,6 +140,18 @@
 
   .shoulder.on { filter:brightness(1.45); transform:translateY(2px); color:var(--text); }
 
+  /* ---------- Per-console layouts (body[data-layout], set when the TV starts a game) ---------- */
+  .face .k[hidden] { display:none; }
+  body[data-layout="nes"] .shoulder, body[data-layout="genesis"] .shoulder { display:none; }
+  body[data-layout="genesis"] .meta .slot:first-child { display:none; }   /* no Select on a Genesis pad */
+  body[data-layout="nes"] .face .k { --c:#c8323a; }
+  body[data-layout="genesis"] .face .k { --c:#3b3b4a; }
+  body[data-layout="gba"] .face .k { --c:#6b5fd0; }
+
+  .chips { flex-direction:column; align-items:flex-start; gap:8px; }
+  .chip-row { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip-row a { padding:5px 12px; border-radius:999px; background:#2b2b38; color:var(--text); text-decoration:none; font-size:13px; font-weight:600; }
+
   /* ---------- Rotate hint ---------- */
   #rotate { display:none; position:fixed; inset:0; z-index:10; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; text-align:center; background:var(--bg-2); font-size:18px; }
   #rotate .phone { width:46px; height:78px; border:3px solid var(--text); border-radius:10px; animation:turn 1.8s ease-in-out infinite; }
@@ -232,13 +244,20 @@
           <h3 id="libraryTitle">On this TV</h3>
           <div id="msg"></div>
           <div id="games"></div>
-          <label class="btn primary">＋ Upload a ROM (.sfc, .smc or .zip)<input id="file" type="file" hidden></label>
+          <label class="btn primary">＋ Upload a game (SNES, NES, Genesis, GBA, GB/GBC or .zip)<input id="file" type="file" hidden></label>
           <button id="overlayBtn" class="btn" type="button">Show / hide the QR on the TV</button>
         </section>
         <section>
           <h3>Free &amp; legal games</h3>
-          <a class="btn" href="https://itch.io/games/free/tag-snes" target="_blank" rel="noopener noreferrer">
-            <span>itch.io — free SNES games<span class="sub">New homebrew from independent developers</span></span><span class="ext">↗</span></a>
+          <div class="btn chips">
+            <span>itch.io — free homebrew<span class="sub">New games from independent developers</span></span>
+            <span class="chip-row">
+              <a href="https://itch.io/games/free/tag-snes" target="_blank" rel="noopener noreferrer">SNES</a>
+              <a href="https://itch.io/games/free/tag-nes" target="_blank" rel="noopener noreferrer">NES</a>
+              <a href="https://itch.io/games/free/tag-sega-genesis" target="_blank" rel="noopener noreferrer">Genesis</a>
+              <a href="https://itch.io/games/free/tag-gba" target="_blank" rel="noopener noreferrer">GBA</a>
+            </span>
+          </div>
           <a class="btn" href="https://pdroms.de/files/super-nintendo-snes-super-famicom" target="_blank" rel="noopener noreferrer">
             <span>PDRoms — SNES<span class="sub">Long-running archive of homebrew &amp; public domain</span></span><span class="ext">↗</span></a>
           <a class="btn" href="https://www.zophar.net/pdroms/snes.html" target="_blank" rel="noopener noreferrer">
@@ -309,7 +328,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "13-checklist";
+  const PAGE_VERSION = "14-consoles";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -630,12 +649,13 @@
 
   /** Nearest face button; also the second nearest when the finger sits between two (e.g. B+Y). */
   function faceButtons(x, y, out) {
-    const byDistance = faceKeys.map((el) => {
+    const byDistance = faceKeys.filter((el) => !el.hidden).map((el) => {
       const r = el.getBoundingClientRect();
       return { b: el.dataset.b, d: Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)) };
     }).sort((p, q) => p.d - q.d);
+    if (byDistance.length === 0) return;
     out.add(byDistance[0].b);
-    if (byDistance[1].d < byDistance[0].d * FACE_CHORD) out.add(byDistance[1].b);
+    if (byDistance[1] && byDistance[1].d < byDistance[0].d * FACE_CHORD) out.add(byDistance[1].b);
   }
 
   function buttonsUnderPointers() {
@@ -698,7 +718,9 @@
   document.addEventListener("contextmenu", (e) => { if (!isMenuUi(e)) e.preventDefault(); });
 
   // ---- Games menu ----
-  const MAX_BYTES = 8 * 1024 * 1024;
+  const MAX_MB = 32;                      // GBA games go up to 32 MB
+  const MAX_BYTES = MAX_MB * 1024 * 1024;
+  const GAME_FILE = /\.(sfc|smc|nes|md|gen|smd|gba|gb|gbc|zip)$/i;   // see domain/Console.kt
   const menu = document.getElementById("menu");
   const gamesEl = document.getElementById("games");
   const msgEl = document.getElementById("msg");
@@ -741,8 +763,8 @@
   }
 
   async function upload(file) {
-    if (!/\.(sfc|smc|zip)$/i.test(file.name)) { showMessage("Only .sfc, .smc or .zip files are supported."); return; }
-    if (file.size > MAX_BYTES) { showMessage("The file is larger than 8 MB."); return; }
+    if (!GAME_FILE.test(file.name)) { showMessage("Unsupported file. Use SNES, NES, Genesis, GBA, GB or GBC games, or a .zip."); return; }
+    if (file.size > MAX_BYTES) { showMessage(`The file is larger than ${MAX_MB} MB.`); return; }
     showMessage(`Uploading ${file.name}…`);
     try {
       const response = await api("/games", { name: file.name }, {
@@ -766,9 +788,34 @@
     document.getElementById("libraryTitle").textContent = inGame ? "Switch game" : "On this TV";
   }
 
+  // ---- Per-console button layout ----
+  // Buttons always send RetroPad codes (the SNES names); a layout only hides the
+  // ones the console lacks and relabels the rest. Genesis A/B/C sit on Y/B/A,
+  // which is where Genesis Plus GX reads them.
+  const LAYOUTS = {
+    snes:    { X: "X", Y: "Y", A: "A", B: "B" },
+    nes:     { A: "A", B: "B" },
+    genesis: { Y: "A", B: "B", A: "C" },
+    gba:     { A: "A", B: "B" },
+  };
+
+  function applyLayout(layout) {
+    const labels = LAYOUTS[layout] || LAYOUTS.snes;
+    document.body.dataset.layout = LAYOUTS[layout] ? layout : "snes";
+    faceKeys.forEach((el) => {
+      const label = labels[el.dataset.b];
+      el.hidden = label === undefined;
+      if (label !== undefined) el.textContent = label;
+    });
+    releaseAll();
+  }
+
+  /** `lobby`, or `game:<layout>`: the lobby always gets the full pad to navigate. */
   function onScreen(value) {
-    const changed = value !== screen;
-    screen = value;
+    const [next, layout] = value.split(":");
+    const changed = next !== screen;
+    screen = next;
+    applyLayout(next === "game" ? layout : "snes");
     showPlayer();
     // Someone started a game or went back to the lobby: this phone's open menu is now stale.
     if (changed && menu.classList.contains("open")) closeMenu();

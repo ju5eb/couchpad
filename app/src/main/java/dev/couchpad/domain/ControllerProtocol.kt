@@ -12,12 +12,14 @@ data class LatencyReport(val averageMs: Int, val maxMs: Int)
  *              `t:<id>` (ping, echoed back verbatim), `r:<avg>:<max>` (latency report),
  *              `m:1` / `m:0` (phone menu opened / closed: pauses the game).
  * TV -> Phone: `p:<n>` (assigned player n), `full` (no free slot), `t:<id>` (pong),
- *              `s:lobby` / `s:game` (which screen the TV shows).
+ *              `s:lobby` / `s:game:<layout>` (which screen the TV shows and, in game, the console's buttons).
  */
 object ControllerProtocol {
     const val FULL = "full"
     const val SCREEN_LOBBY = "s:lobby"
-    const val SCREEN_GAME = "s:game"
+
+    /** In game the phone also learns the console's button layout: `s:game:nes`, `s:game:genesis`… */
+    fun gameScreen(layout: String) = "s:game:$layout"
 
     /** True when the phone opened its menu, false when it closed it, null if not a menu message. */
     fun parseMenu(message: String): Boolean? = when (message) {

@@ -35,6 +35,11 @@ class ControllerProtocolTest {
     }
 
     @Test
+    fun `game screen message carries the console layout`() {
+        assertEquals("s:game:genesis", ControllerProtocol.gameScreen(Console.GENESIS.layout))
+    }
+
+    @Test
     fun `parses fast join requests`() {
         assertEquals(true, ControllerProtocol.parseFastJoin("f:1"))
         assertEquals(false, ControllerProtocol.parseFastJoin("f:0"))

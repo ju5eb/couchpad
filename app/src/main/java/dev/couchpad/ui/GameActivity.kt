@@ -22,6 +22,7 @@ import com.swordfish.libretrodroid.GLRetroViewData
 import com.swordfish.libretrodroid.LibretroDroid
 import dev.couchpad.ControllerHub
 import dev.couchpad.CouchpadApp
+import dev.couchpad.domain.Console
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.emulator.LegacyPacingMode
@@ -292,8 +293,11 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
     }
 
     private fun createRetroView(game: File, context: Context): GLRetroView {
+        val console = Console.forFile(game.name) ?: Console.SNES
+        // The /diag core override only offers Snes9x variants, so it applies to SNES games only.
+        val core = dev.couchpad.Diagnostics.coreOverride?.takeIf { console == Console.SNES } ?: console.core
         val data = GLRetroViewData(context).apply {
-            coreFilePath = dev.couchpad.Diagnostics.coreOverride?.let { "lib${it}_libretro_android.so" } ?: CORE_LIBRARY
+            coreFilePath = "lib${core}_libretro_android.so"
             dev.couchpad.Diagnostics.core = coreFilePath
             gameFilePath = game.absolutePath
             systemDirectory = filesDir.absolutePath
@@ -397,7 +401,6 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
     }
 
     private companion object {
-        const val CORE_LIBRARY = "libsnes9x_libretro_android.so"
         const val TAG = "Couchpad"
         const val FPS_WINDOW_MS = 2_000L
 

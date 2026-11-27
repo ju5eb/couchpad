@@ -138,7 +138,7 @@ class ControllerServer(
         val length = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
             ?: return respondText("Missing Content-Length", status = HttpStatusCode.LengthRequired)
         if (length > RomLibrary.MAX_BYTES) {
-            return respondText("The file is larger than 8 MB", status = HttpStatusCode.PayloadTooLarge)
+            return respondText("The file is larger than ${RomLibrary.MAX_MB} MB", status = HttpStatusCode.PayloadTooLarge)
         }
         when (val result = library.save(name, receive<ByteArray>())) {
             is RomLibrary.SaveResult.Saved -> respondText(result.name, status = HttpStatusCode.Created)

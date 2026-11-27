@@ -14,22 +14,39 @@ Phone (browser gamepad) ──WebSocket over LAN──► TV (Ktor server) ─�
 - **Phase 2 — emulator.** Snes9x runs through
   [LibretroDroid](https://github.com/Swordfish90/LibretroDroid); each phone
   drives its own input port. Done.
-- **Phase 3 — lobby (current).** The app opens on a lobby (QR, players with
+- **Phase 3 — lobby.** The app opens on a lobby (QR, players with
   latency, game library). A phone's joystick or the TV remote picks a game.
   In game, the phone's ☰ menu pauses it and offers resume, back to lobby,
   restart and switching game.
+- **Phase 4 — more consoles (current).** NES, Genesis and GBA/GB/GBC
+  alongside SNES.
+
+## Consoles
+
+The ROM's extension picks the console (`domain/Console.kt`):
+
+| Console | Extensions | libretro core | Phone buttons |
+| --- | --- | --- | --- |
+| SNES | `.sfc` `.smc` | snes9x | A B X Y L R |
+| NES | `.nes` | fceumm | B A |
+| Genesis / Mega Drive | `.md` `.gen` `.smd` | genesis_plus_gx | A B C |
+| GBA, Game Boy, Game Boy Color | `.gba` `.gb` `.gbc` | mgba | A B L R |
+
+The TV tells phones the console when a game starts (`s:game:<layout>`); the
+phone shows only that console's buttons. Phones always send RetroPad codes, so
+the TV needs no per-console key mapping.
 
 ## Emulator setup
 
-The core is not committed. Fetch it (default ABI `armeabi-v7a`):
+Cores are not committed. Fetch them (all cores, armeabi-v7a and arm64-v8a):
 
 ```bash
-scripts/fetch-core.sh            # or: scripts/fetch-core.sh arm64-v8a
+scripts/fetch-core.sh                 # or: scripts/fetch-core.sh arm64-v8a mgba
 ```
 
-Upload games from the phone: tap **☰ Games** on the controller page, then
-**Upload a ROM** (`.sfc`, `.smc`, or a `.zip` containing one). The TV stores it
-and starts it; phones stay connected.
+Upload games from the phone: tap **☰ Menu** on the controller page, then
+**Upload a game** (any extension above, or a `.zip` containing one, up to
+32 MB). The TV stores it and starts it; phones stay connected.
 
 ROMs live in `/sdcard/Android/data/dev.couchpad/files/roms/` (also reachable
 with `adb push` once the app has run and created the folder).

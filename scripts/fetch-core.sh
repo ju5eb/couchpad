@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# Downloads the Snes9x libretro core into jniLibs for the given ABI (default armeabi-v7a).
+# Downloads the libretro cores Couchpad uses into jniLibs.
+#   scripts/fetch-core.sh                 # every core, armeabi-v7a and arm64-v8a
+#   scripts/fetch-core.sh armeabi-v7a     # every core, one ABI
+#   scripts/fetch-core.sh arm64-v8a mgba  # one core, one ABI
 set -euo pipefail
 
-abi="${1:-armeabi-v7a}"
+CORES=(snes9x fceumm genesis_plus_gx mgba)   # SNES, NES, Genesis, GBA/GB/GBC — see domain/Console.kt
+abis=("${1:-armeabi-v7a}")
+[ $# -eq 0 ] && abis=(armeabi-v7a arm64-v8a)
+cores=("${@:2}")
+[ ${#cores[@]} -eq 0 ] && cores=("${CORES[@]}")
+
 root="$(cd "$(dirname "$0")/.." && pwd)"
-dest="$root/app/src/main/jniLibs/$abi"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -sSfL -o "$tmp/core.zip" \
-  "https://buildbot.libretro.com/nightly/android/latest/$abi/snes9x_libretro_android.so.zip"
-unzip -q "$tmp/core.zip" -d "$tmp"
-mkdir -p "$dest"
-cp "$tmp/snes9x_libretro_android.so" "$dest/libsnes9x_libretro_android.so"
-echo "Core installed in $dest"
+for abi in "${abis[@]}"; do
+  dest="$root/app/src/main/jniLibs/$abi"
+  mkdir -p "$dest"
+  for core in "${cores[@]}"; do
+    curl -sSfL -o "$tmp/$core.zip" \
+      "https://buildbot.libretro.com/nightly/android/latest/$abi/${core}_libretro_android.so.zip"
+    unzip -q -o "$tmp/$core.zip" -d "$tmp"
+    cp "$tmp/${core}_libretro_android.so" "$dest/lib${core}_libretro_android.so"
+    echo "$abi: $core"
+  done
+done

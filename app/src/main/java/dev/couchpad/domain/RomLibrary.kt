@@ -26,12 +26,12 @@ class RomLibrary(private val dir: File) {
     fun save(originalName: String, bytes: ByteArray): SaveResult {
         if (originalName.lowercase().endsWith(".zip")) {
             val (entryName, entryBytes) = extractRom(bytes)
-                ?: return SaveResult.Rejected("The .zip has no .sfc or .smc file")
+                ?: return SaveResult.Rejected("The .zip has no supported game file")
             return save(entryName, entryBytes)
         }
-        val name = sanitize(originalName) ?: return SaveResult.Rejected("Only .sfc, .smc or .zip files are supported")
+        val name = sanitize(originalName) ?: return SaveResult.Rejected("Unsupported file. Use $SUPPORTED_TEXT or a .zip")
         if (bytes.isEmpty()) return SaveResult.Rejected("The file is empty")
-        if (bytes.size > MAX_BYTES) return SaveResult.Rejected("The file is larger than 8 MB")
+        if (bytes.size > MAX_BYTES) return SaveResult.Rejected("The file is larger than $MAX_MB MB")
 
         dir.mkdirs()
         val partial = File(dir, "$name.part")
@@ -69,8 +69,11 @@ class RomLibrary(private val dir: File) {
     }
 
     companion object {
-        const val MAX_BYTES = 8 * 1024 * 1024
-        private val EXTENSIONS = setOf("sfc", "smc")
+        /** GBA games go up to 32 MB. */
+        const val MAX_MB = 32
+        const val MAX_BYTES = MAX_MB * 1024 * 1024
+        private val EXTENSIONS = Console.supportedExtensions
+        private val SUPPORTED_TEXT = EXTENSIONS.sorted().joinToString(", ") { ".$it" }
         private val UNSAFE_CHARS = Regex("[^A-Za-z0-9 ._()-]")
 
         /** Strips any path, keeps a safe stem and a supported extension, or returns null. */

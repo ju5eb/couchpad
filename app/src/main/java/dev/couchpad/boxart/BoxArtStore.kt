@@ -1,6 +1,7 @@
 package dev.couchpad.boxart
 
 import dev.couchpad.domain.BoxArtNames
+import dev.couchpad.domain.Console
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -15,7 +16,13 @@ import java.net.URLEncoder
  * days so the lobby does not hammer the server; network errors are not, so a
  * TV without internet simply tries again next time.
  */
-class BoxArtStore(private val dir: File, private val baseUrl: String = DEFAULT_BASE_URL) {
+class BoxArtStore(
+    private val dir: File,
+    /** Folder URL holding `<name>.png` covers for a ROM; null when its console has none. */
+    private val artFolder: (rom: String) -> String? = { libretroThumbnails(it) },
+) {
+    /** Fixed folder for every ROM (tests). */
+    constructor(dir: File, baseUrl: String) : this(dir, { baseUrl })
 
     private sealed interface Download {
         class Found(val bytes: ByteArray) : Download
@@ -31,10 +38,11 @@ class BoxArtStore(private val dir: File, private val baseUrl: String = DEFAULT_B
         val miss = File(dir, "$rom.miss")
         if (miss.isFile && System.currentTimeMillis() - miss.lastModified() < RETRY_AFTER_MS) return null
 
+        val folder = artFolder(rom) ?: return null
         dir.mkdirs()
         var failed = false
         for (name in BoxArtNames.candidates(rom)) {
-            when (val result = download("$baseUrl/${encode(name)}.png")) {
+            when (val result = download("$folder/${encode(name)}.png")) {
                 is Download.Found -> return save(rom, result.bytes).also { miss.delete() }
                 Download.NotFound -> Unit
                 Download.Failed -> failed = true
@@ -89,8 +97,11 @@ class BoxArtStore(private val dir: File, private val baseUrl: String = DEFAULT_B
     private fun encode(name: String) = URLEncoder.encode(name, "UTF-8").replace("+", "%20")
 
     companion object {
-        const val DEFAULT_BASE_URL =
-            "https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/master/Named_Boxarts"
+        private const val THUMBNAILS_ROOT = "https://raw.githubusercontent.com/libretro-thumbnails"
+
+        /** libretro-thumbnails keeps one repository per system, e.g. …/Nintendo_-_Game_Boy_Advance/master/Named_Boxarts. */
+        fun libretroThumbnails(rom: String): String? = Console.forFile(rom)
+            ?.let { "$THUMBNAILS_ROOT/${it.boxArtRepository(rom)}/master/Named_Boxarts" }
         private const val CONNECT_TIMEOUT_MS = 4_000
         private const val READ_TIMEOUT_MS = 8_000
         private const val MAX_BYTES = 2 * 1024 * 1024

@@ -73,6 +73,15 @@ class BoxArtStoreTest {
     }
 
     @Test
+    fun `each console looks in its own libretro-thumbnails repository`() {
+        val root = "https://raw.githubusercontent.com/libretro-thumbnails"
+        assertEquals("$root/Nintendo_-_Nintendo_Entertainment_System/master/Named_Boxarts", BoxArtStore.libretroThumbnails("Mario.nes"))
+        assertEquals("$root/Sega_-_Mega_Drive_-_Genesis/master/Named_Boxarts", BoxArtStore.libretroThumbnails("Sonic.md"))
+        assertEquals("$root/Nintendo_-_Game_Boy_Color/master/Named_Boxarts", BoxArtStore.libretroThumbnails("Zelda.gbc"))
+        assertNull(BoxArtStore.libretroThumbnails("notes.txt"))
+    }
+
+    @Test
     fun `network failures are not remembered as misses`() {
         val unusedPort = ServerSocket(0).use { it.localPort }
         val offline = BoxArtStore(temp.root, "http://127.0.0.1:$unusedPort/art")

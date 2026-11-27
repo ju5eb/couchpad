@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import dev.couchpad.ControllerHub
 import dev.couchpad.boxart.BoxArtStore
 import dev.couchpad.CouchpadApp
+import dev.couchpad.domain.Console
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.GridNavigator
@@ -173,9 +174,19 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
                 background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(210, 0, 0, 0), Color.TRANSPARENT))
             }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (CARD_H * 0.6f).toInt().dp, Gravity.BOTTOM))
             addView(initials, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
-            ).apply { setMargins(0, 2.dp, 12.dp, 0) })
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL or Gravity.END,
+            ).apply { setMargins(0, 0, 12.dp, 10.dp) })
             loadBoxArt(file, art, initials)
+            // Which console runs it: SNES, NES, GENESIS, GBA (or GB / GBC).
+            Console.forFile(file)?.let { console ->
+                addView(text(console.badge(file), 10f, Color.WHITE, bold = true).apply {
+                    letterSpacing = 0.1f
+                    setPadding(7.dp, 2.dp, 7.dp, 2.dp)
+                    background = GradientDrawable().apply { cornerRadius = 6.dp.toFloat(); setColor(Color.argb(170, 0, 0, 0)) }
+                }, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
+                ).apply { setMargins(0, 10.dp, 10.dp, 0) })
+            }
             addView(text(title, 17f, Color.WHITE, bold = true).apply {
                 maxLines = 2
                 setShadowLayer(6f, 0f, 2f, Color.argb(160, 0, 0, 0))

@@ -2,6 +2,7 @@ package dev.couchpad
 
 import android.content.Context
 import android.os.Build
+import dev.couchpad.domain.Console
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.ControllerProtocol
 import dev.couchpad.domain.PlayerSlots
@@ -145,7 +146,11 @@ class ControllerHub(context: Context) {
         listener?.onGameSelected()
     }
 
-    private fun screenMessage() = if (inGame) ControllerProtocol.SCREEN_GAME else ControllerProtocol.SCREEN_LOBBY
+    private fun screenMessage() = if (inGame) {
+        ControllerProtocol.gameScreen((selectedGame?.let(Console::forFile) ?: Console.SNES).layout)
+    } else {
+        ControllerProtocol.SCREEN_LOBBY
+    }
 
     private fun dispatch(event: ControllerEvent) {
         var pauseChanged: Boolean? = null

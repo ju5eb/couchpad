@@ -94,6 +94,15 @@ class RomLibraryTest {
     }
 
     @Test
+    fun `accepts every supported console and lists them together`() {
+        val library = RomLibrary(temp.newFolder("roms"))
+        listOf("A.nes", "B.md", "C.gba", "D.gbc", "E.sfc").forEach {
+            assertTrue(it, library.save(it, byteArrayOf(1)) is RomLibrary.SaveResult.Saved)
+        }
+        assertEquals(listOf("A.nes", "B.md", "C.gba", "D.gbc", "E.sfc"), library.list())
+    }
+
+    @Test
     fun `uploading the same name replaces the file`() {
         val library = RomLibrary(temp.newFolder("roms"))
         library.save("Game.sfc", byteArrayOf(1))
