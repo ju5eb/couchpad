@@ -8,6 +8,7 @@ class CouchpadApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         hub = ControllerHub(this).also { it.start() }
     }
 }

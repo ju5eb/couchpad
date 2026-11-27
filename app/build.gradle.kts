@@ -13,6 +13,9 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        // Only ship ABIs that have the Snes9x core in jniLibs; otherwise a device
+        // whose primary ABI lacks the core installs the app but crashes on game start.
+        ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
     }
 
     buildTypes {

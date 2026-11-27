@@ -24,6 +24,7 @@ import dev.couchpad.ControllerHub
 import dev.couchpad.CouchpadApp
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
+import dev.couchpad.emulator.LegacyPacingMode
 import dev.couchpad.emulator.RefreshRateContext
 import dev.couchpad.emulator.SnesKeyMap
 import dev.couchpad.server.LocalAddress
@@ -54,7 +55,9 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Ask the TV for its game mode: skips picture processing that adds tens of ms of lag.
-        window.attributes = window.attributes.apply { preferMinimalPostProcessing = true }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply { preferMinimalPostProcessing = true }
+        }
         hub = (application as CouchpadApp).hub
 
         val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
@@ -76,15 +79,50 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
             return
         }
         statusLabel.text = game.nameWithoutExtension
-        startGame(game)
+        dev.couchpad.Diagnostics.game = game.name
+        @Suppress("DEPRECATION")
+        val display = windowManager.defaultDisplay
+        dev.couchpad.Diagnostics.displayRefreshHz = display.refreshRate
+        dev.couchpad.Diagnostics.displayModes = LegacyPacingMode.describe(display)
+        val legacyMode = if (needsLegacyPacing()) LegacyPacingMode.pick(display) else null
+        dev.couchpad.Diagnostics.pacing = "wallClockPacing=${hub.wallClockPacing} legacyMode=${legacyMode?.modeId}"
+        if (legacyMode != null) startAfterModeSwitch(game, display, legacyMode) else startGame(game)
         hub.connectedPlayers().forEach { panels[it]?.setConnected(true) }
         applyOverlayVisibility()
+    }
+
+    /** Below Android 14 a slow device can only get wall-clock pacing through a display mode switch. */
+    private fun needsLegacyPacing() =
+        hub.wallClockPacing == true && Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
+    /**
+     * Asks for [mode] on this window and starts the emulator once the display reports it
+     * (LibretroDroid reads the refresh rate when it starts). Starts anyway after a timeout.
+     */
+    private fun startAfterModeSwitch(game: File, display: android.view.Display, mode: android.view.Display.Mode) {
+        window.attributes = window.attributes.apply { preferredDisplayModeId = mode.modeId }
+        lifecycleScope.launch {
+            var waited = 0L
+            while (kotlin.math.abs(display.refreshRate - mode.refreshRate) > 1f && waited < MODE_SWITCH_TIMEOUT_MS) {
+                delay(MODE_SWITCH_POLL_MS)
+                waited += MODE_SWITCH_POLL_MS
+            }
+            dev.couchpad.Diagnostics.displayRefreshHz = display.refreshRate
+            dev.couchpad.Diagnostics.pacing = "legacy mode switch to #${mode.modeId} @${mode.refreshRate}Hz, display now ${display.refreshRate}Hz after ${waited}ms"
+            Log.i(TAG, dev.couchpad.Diagnostics.pacing)
+            if (!isFinishing && !isDestroyed) startGame(game)
+        }
     }
 
     /** Held while the game screen is visible: Wi-Fi power save causes 100 ms input spikes. */
     private val wifiLock by lazy {
         getSystemService(WifiManager::class.java)
-            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "couchpad:input")
+            .createWifiLock(
+                // LOW_LATENCY exists from Android 10; older devices reject it as an illegal lock type.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                else @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "couchpad:input",
+            )
             .apply { setReferenceCounted(false) }
     }
 
@@ -106,7 +144,7 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
 
     override fun onDestroy() {
         super.onDestroy()
-        pacingContext?.release()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) pacingContext?.release()
     }
 
     override fun onReturnToLobby() {
@@ -234,13 +272,15 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
             val slow = fps < MIN_VSYNC_FPS
             Log.i(TAG, "pacing check: drawn fps=$fps -> ${if (slow) "wall-clock" else "vsync"}")
             hub.wallClockPacing = slow
+            dev.couchpad.Diagnostics.pacing = "check fps=$fps -> ${if (slow) "wall-clock" else "vsync"} (wall-clock needs sdk 34)"
             if (slow) recreate()
         }
     }
 
     private fun createRetroView(game: File, context: Context): GLRetroView {
         val data = GLRetroViewData(context).apply {
-            coreFilePath = CORE_LIBRARY
+            coreFilePath = dev.couchpad.Diagnostics.coreOverride?.let { "lib${it}_libretro_android.so" } ?: CORE_LIBRARY
+            dev.couchpad.Diagnostics.core = coreFilePath
             gameFilePath = game.absolutePath
             systemDirectory = filesDir.absolutePath
             savesDirectory = filesDir.absolutePath
@@ -248,12 +288,32 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         }
         return GLRetroView(context, data).also { view ->
             retroView = view
+            applyRenderSize(view)
             lifecycle.addObserver(view)
             lifecycleScope.launch {
                 view.getGLRetroErrors().collect { code -> statusLabel.text = "Emulator error $code" }
             }
             logFrameRate(view)
         }
+    }
+
+    /**
+     * Weak GPUs (e.g. Mali-450 at 1080p) miss every other vsync and draw 30 fps. Rendering
+     * the game surface smaller lets the hardware scaler do the upscale for free; SNES output
+     * is 224 lines, so 540 loses nothing visible.
+     */
+    private fun applyRenderSize(view: GLRetroView) {
+        val slowWithoutWallClock = needsLegacyPacing()
+        val height = dev.couchpad.Diagnostics.renderHeightOverride
+            ?: if (slowWithoutWallClock) LEGACY_RENDER_HEIGHT else 0
+        if (height <= 0) {
+            dev.couchpad.Diagnostics.renderSize = "native"
+            return
+        }
+        val metrics = resources.displayMetrics
+        val width = height * maxOf(metrics.widthPixels, metrics.heightPixels) / minOf(metrics.widthPixels, metrics.heightPixels)
+        view.holder.setFixedSize(width, height)
+        dev.couchpad.Diagnostics.renderSize = "${width}x$height"
     }
 
     /** Logs drawn frames per second (`adb logcat -s Couchpad`). */
@@ -265,7 +325,10 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         lifecycleScope.launch {
             while (true) {
                 delay(FPS_WINDOW_MS)
-                Log.i(TAG, "drawn fps=${frames.getAndSet(0) * 1000.0 / FPS_WINDOW_MS} overlay=${overlay.visibility == View.VISIBLE}")
+                val fps = frames.getAndSet(0) * 1000.0 / FPS_WINDOW_MS
+                dev.couchpad.Diagnostics.drawnFps = fps
+                dev.couchpad.Diagnostics.overlayVisible = overlay.visibility == View.VISIBLE
+                Log.i(TAG, "drawn fps=$fps overlay=${overlay.visibility == View.VISIBLE}")
             }
         }
     }
@@ -329,6 +392,9 @@ class GameActivity : ComponentActivity(), ControllerHub.Listener {
         const val MIN_VSYNC_FPS = 55f
         const val PACING_WARMUP_MS = 2_000L
         const val PACING_SAMPLE_MS = 4_000L
+        const val LEGACY_RENDER_HEIGHT = 540
+        const val MODE_SWITCH_TIMEOUT_MS = 4_000L
+        const val MODE_SWITCH_POLL_MS = 100L
         val OVERLAY_TOGGLE_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,

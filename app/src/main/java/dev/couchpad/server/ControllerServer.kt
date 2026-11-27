@@ -71,6 +71,25 @@ class ControllerServer(
                     call.response.header(HttpHeaders.CacheControl, "no-store")
                     call.respondText(controllerPage, ContentType.Text.Html)
                 }
+                // Diagnostics for devices without adb: last uncaught exception plus device info.
+                get("/crash") {
+                    call.response.header(HttpHeaders.CacheControl, "no-store")
+                    call.respondText(dev.couchpad.CrashLog.read() ?: "no crash recorded", ContentType.Text.Plain)
+                }
+                get("/diag") {
+                    call.response.header(HttpHeaders.CacheControl, "no-store")
+                    // Tuning knob for weak devices: /diag?renderHeight=540 (0 = native) restarts the game with it.
+                    call.request.queryParameters["renderHeight"]?.toIntOrNull()?.let { height ->
+                        dev.couchpad.Diagnostics.renderHeightOverride = height.coerceIn(0, 2160)
+                        currentGame()?.let(onGameSelected)
+                    }
+                    // /diag?core=snes9x2010 restarts the game with another bundled core.
+                    call.request.queryParameters["core"]?.takeIf { it in dev.couchpad.Diagnostics.cores }?.let { core ->
+                        dev.couchpad.Diagnostics.coreOverride = core
+                        currentGame()?.let(onGameSelected)
+                    }
+                    call.respondText(dev.couchpad.Diagnostics.report(), ContentType.Text.Plain)
+                }
                 get("/games") { if (call.authorized()) call.listGames() }
                 post("/games") { if (call.authorized()) call.uploadGame() }
                 post("/play") { if (call.authorized()) call.playGame() }
