@@ -190,6 +190,8 @@
       <div class="row"><span>Wi-Fi</span><b id="fastSsid"></b></div>
       <div class="row"><span>Password</span><input id="fastPass" readonly><button id="copyPass" class="btn" type="button" style="width:auto">Copy</button></div>
       <div id="fastStatus">Waiting for the phone to join the TV's Wi-Fi…</div>
+      <!-- Experimental: hands the same WIFI: payload the TV's QR holds to the phone; only some phones open it. -->
+      <a id="fastJoin" class="btn" href="#">📶 Join the TV's Wi-Fi from here (may not work on every phone)</a>
       <div class="actions">
         <a id="fastOpen" class="btn primary" href="#">Open controller on the TV's Wi-Fi</a>
         <button id="fastCancel" class="btn" type="button" style="width:auto">Cancel</button>
@@ -292,7 +294,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "11-fast-help";
+  const PAGE_VERSION = "12-wifi-link";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -449,6 +451,12 @@
   }
 
   function moveTo(host) { location.replace(controllerUrl(host)); }
+
+  /** Same text the TV's QR holds (`WIFI:T:WPA;S:…;P:…;;`), special characters escaped. */
+  function wifiJoinPayload(ssid, pass) {
+    const esc = (value) => String(value || "").replace(/([\\;,:"])/g, "\\$1");
+    return pass ? `WIFI:T:WPA;S:${esc(ssid)};P:${esc(pass)};;` : `WIFI:T:nopass;S:${esc(ssid)};;`;
+  }
 
   /** After a drop: on the TV's Wi-Fi, fall back to home once it is gone; on home, jump to the TV's Wi-Fi if it is there. */
   async function moveToReachableNetwork() {
@@ -752,6 +760,7 @@
     document.getElementById("fastPass").value = net.pass || "";
     document.getElementById("fastStatus").textContent = "Waiting for the phone to join the TV's Wi-Fi…";
     document.getElementById("fastOpen").href = controllerUrl(net.direct);   // manual way in if detection does not fire
+    document.getElementById("fastJoin").href = wifiJoinPayload(net.ssid, net.pass);
     fastEl.classList.add("open");
     send("f:1");                                    // the TV shows its Wi-Fi QR and the steps
     if (screen === "game" && !menuPausing) { send("m:1"); menuPausing = true; }
