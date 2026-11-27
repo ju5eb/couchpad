@@ -32,9 +32,11 @@ class FastJoinPanel(context: Context) : FrameLayout(context) {
         val steps = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             addView(title)
-            addView(step("1", "Open your phone's camera and scan this code to join the TV's Wi-Fi."))
-            addView(step("2", "If the phone says the network has no internet, choose \"Keep connection\" or \"Use anyway\"."))
-            addView(step("3", "Go back to the controller and leave it open: it switches by itself."))
+            // Without step 1 the browser keeps using mobile data and never reaches the TV's Wi-Fi.
+            addView(step("1", "Turn off mobile data on your phone for a moment."))
+            addView(step("2", "Open your phone's camera and scan this code to join the TV's Wi-Fi."))
+            addView(step("3", "If the phone says the network has no internet, choose \"Keep connection\" or \"Use anyway\"."))
+            addView(step("4", "Go back to the controller and leave it open: it switches by itself."))
             addView(network.apply { setPadding(0, 18.dp, 0, 0) })
             addView(password)
             addView(text("Cancel it from the phone if you change your mind.", 12f, Color.rgb(140, 140, 166)).apply { setPadding(0, 14.dp, 0, 0) })

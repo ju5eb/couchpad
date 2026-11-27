@@ -41,6 +41,7 @@
   #fast .row span { width:72px; color:var(--muted); }
   #fast input { flex:1; min-width:0; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.1); background:#20202b; color:var(--text); font:inherit; -webkit-user-select:text; user-select:text; }
   #fast .actions { display:flex; gap:8px; }
+  #fast .actions .primary { flex:1; text-align:center; }
   #fastStatus { font-size:13px; color:var(--warn); }
   #menuBtn { display:flex; align-items:center; gap:6px; padding:7px 14px; border:0; border-radius:999px; background:var(--accent); color:#fff; font:inherit; font-size:13px; font-weight:600; box-shadow:0 4px 14px rgba(124,92,255,.35); }
 
@@ -182,13 +183,17 @@
   <div id="fast">
     <div class="sheet">
       <h2>⚡ Faster connection</h2>
-      <p>The TV is now showing a code. <b>Scan it with your phone's camera</b> to join the TV's own Wi-Fi.</p>
-      <p>If the phone says the network has <b>no internet</b>, choose <b>"Keep connection"</b> or <b>"Use anyway"</b>.</p>
-      <p>Then come back here and leave this page open: the controller switches by itself.</p>
+      <p><b>1.</b> Turn off <b>mobile data</b> for a moment (otherwise the browser keeps using it and can't reach the TV).</p>
+      <p><b>2.</b> The TV is showing a code: <b>scan it with your phone's camera</b> to join the TV's own Wi-Fi.</p>
+      <p><b>3.</b> If the phone says the network has <b>no internet</b>, choose <b>"Keep connection"</b> or <b>"Use anyway"</b>.</p>
+      <p><b>4.</b> Come back here and leave this page open: the controller switches by itself.</p>
       <div class="row"><span>Wi-Fi</span><b id="fastSsid"></b></div>
       <div class="row"><span>Password</span><input id="fastPass" readonly><button id="copyPass" class="btn" type="button" style="width:auto">Copy</button></div>
       <div id="fastStatus">Waiting for the phone to join the TV's Wi-Fi…</div>
-      <div class="actions"><button id="fastCancel" class="btn" type="button">Cancel</button></div>
+      <div class="actions">
+        <a id="fastOpen" class="btn primary" href="#">Open controller on the TV's Wi-Fi</a>
+        <button id="fastCancel" class="btn" type="button" style="width:auto">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -287,7 +292,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "10-fast";
+  const PAGE_VERSION = "11-fast-help";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -438,10 +443,12 @@
   }
 
   /** Same player and same control settings on the other address (each address has its own storage). */
-  function moveTo(host) {
+  function controllerUrl(host) {
     const query = new URLSearchParams({ t: token, id: clientId, cfg: JSON.stringify(settings) });
-    location.replace(`http://${host}:${port()}/?${query}`);
+    return `http://${host}:${port()}/?${query}`;
   }
+
+  function moveTo(host) { location.replace(controllerUrl(host)); }
 
   /** After a drop: on the TV's Wi-Fi, fall back to home once it is gone; on home, jump to the TV's Wi-Fi if it is there. */
   async function moveToReachableNetwork() {
@@ -454,10 +461,18 @@
     return false;
   }
 
+  const PROBE_HINT_AFTER_MS = 20000;
+
   function startProbe() {
     stopProbe();
+    const started = Date.now();
     probeTimer = setInterval(async () => {
-      if (net && !onDirect() && await reachable(net.direct)) { stopProbe(); moveTo(net.direct); }
+      if (net && !onDirect() && await reachable(net.direct)) { stopProbe(); moveTo(net.direct); return; }
+      // Usually the browser is still going out over mobile data, which cannot reach the TV's Wi-Fi.
+      if (Date.now() - started > PROBE_HINT_AFTER_MS) {
+        document.getElementById("fastStatus").textContent =
+          `Still can't reach the TV over its Wi-Fi. Check that mobile data is off and that the phone is connected to "${net ? net.ssid : "the TV's Wi-Fi"}", then tap the button below.`;
+      }
     }, 1500);
   }
 
@@ -735,6 +750,8 @@
     releaseAll();
     document.getElementById("fastSsid").textContent = net.ssid || "";
     document.getElementById("fastPass").value = net.pass || "";
+    document.getElementById("fastStatus").textContent = "Waiting for the phone to join the TV's Wi-Fi…";
+    document.getElementById("fastOpen").href = controllerUrl(net.direct);   // manual way in if detection does not fire
     fastEl.classList.add("open");
     send("f:1");                                    // the TV shows its Wi-Fi QR and the steps
     if (screen === "game" && !menuPausing) { send("m:1"); menuPausing = true; }
