@@ -41,8 +41,21 @@
   #fast .row span { width:72px; color:var(--muted); }
   #fast input { flex:1; min-width:0; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.1); background:#20202b; color:var(--text); font:inherit; -webkit-user-select:text; user-select:text; }
   #fast .actions { display:flex; gap:8px; }
-  #fast .actions .primary { flex:1; text-align:center; }
-  #fastStatus { font-size:13px; color:var(--warn); }
+  .checks { list-style:none; margin:4px 0; padding:0; display:flex; flex-direction:column; gap:10px; }
+  .checks li { display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-radius:12px; background:#1d1d27; border:1px solid rgba(255,255,255,.06); }
+  .checks li b { display:block; font-size:14px; }
+  .checks li small { display:block; margin-top:3px; font-size:12px; line-height:1.4; color:var(--muted); }
+  .checks .mark { flex:none; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:14px; font-weight:800; border:2px solid rgba(255,255,255,.25); color:#fff; }
+  .checks li[data-state="ok"] { border-color:rgba(74,222,128,.4); }
+  .checks li[data-state="ok"] .mark { background:var(--ok); border-color:var(--ok); color:#0b2a17; }
+  .checks li[data-state="ok"] .mark::before { content:"✓"; }
+  .checks li[data-state="fail"] { border-color:rgba(248,113,113,.45); }
+  .checks li[data-state="fail"] .mark { background:var(--bad); border-color:var(--bad); }
+  .checks li[data-state="fail"] .mark::before { content:"✕"; }
+  .checks li[data-state="fail"] small { color:#fca5a5; }
+  .checks li[data-state="busy"] .mark { border-color:var(--warn); border-top-color:transparent; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   #menuBtn { display:flex; align-items:center; gap:6px; padding:7px 14px; border:0; border-radius:999px; background:var(--accent); color:#fff; font:inherit; font-size:13px; font-weight:600; box-shadow:0 4px 14px rgba(124,92,255,.35); }
 
   /* ---------- Shoulders ---------- */
@@ -183,19 +196,21 @@
   <div id="fast">
     <div class="sheet">
       <h2>⚡ Faster connection</h2>
-      <p><b>1.</b> Turn off <b>mobile data</b> for a moment (otherwise the browser keeps using it and can't reach the TV).</p>
-      <p><b>2.</b> The TV is showing a code: <b>scan it with your phone's camera</b> to join the TV's own Wi-Fi.</p>
-      <p><b>3.</b> If the phone says the network has <b>no internet</b>, choose <b>"Keep connection"</b> or <b>"Use anyway"</b>.</p>
-      <p><b>4.</b> Come back here and leave this page open: the controller switches by itself.</p>
+      <!-- Each step is checked automatically when the page is visible (and right when you come back to it). -->
+      <ol class="checks">
+        <li id="chkData" data-state="pending"><span class="mark"></span><div>
+          <b>Turn off mobile data</b>
+          <small id="chkDataHint">So the browser uses the TV's Wi-Fi instead of mobile data.</small></div></li>
+        <li id="chkWifi" data-state="pending"><span class="mark"></span><div>
+          <b>Join the TV's Wi-Fi, then come back here</b>
+          <small id="chkWifiHint">Scan the code on the TV with your camera (or pick the network below in Wi-Fi settings). If it says "no internet", choose "Keep connection".</small></div></li>
+        <li id="chkMove" data-state="pending"><span class="mark"></span><div>
+          <b>Switch the controller</b>
+          <small id="chkMoveHint">Happens by itself once step 2 is done.</small></div></li>
+      </ol>
       <div class="row"><span>Wi-Fi</span><b id="fastSsid"></b></div>
       <div class="row"><span>Password</span><input id="fastPass" readonly><button id="copyPass" class="btn" type="button" style="width:auto">Copy</button></div>
-      <div id="fastStatus">Waiting for the phone to join the TV's Wi-Fi…</div>
-      <!-- Experimental: hands the same WIFI: payload the TV's QR holds to the phone; only some phones open it. -->
-      <a id="fastJoin" class="btn" href="#">📶 Join the TV's Wi-Fi from here (may not work on every phone)</a>
-      <div class="actions">
-        <a id="fastOpen" class="btn primary" href="#">Open controller on the TV's Wi-Fi</a>
-        <button id="fastCancel" class="btn" type="button" style="width:auto">Cancel</button>
-      </div>
+      <div class="actions"><button id="fastCancel" class="btn" type="button">Cancel</button></div>
     </div>
   </div>
 
@@ -294,7 +309,7 @@
 <script>
 (() => {
   // Bump on every controller change: shown in the menu and logged by the TV on connect.
-  const PAGE_VERSION = "12-wifi-link";
+  const PAGE_VERSION = "13-checklist";
   document.getElementById("version").textContent = "v" + PAGE_VERSION;
   const token = new URLSearchParams(location.search).get("t") || "";
   const statusEl = document.getElementById("status");
@@ -452,12 +467,6 @@
 
   function moveTo(host) { location.replace(controllerUrl(host)); }
 
-  /** Same text the TV's QR holds (`WIFI:T:WPA;S:…;P:…;;`), special characters escaped. */
-  function wifiJoinPayload(ssid, pass) {
-    const esc = (value) => String(value || "").replace(/([\\;,:"])/g, "\\$1");
-    return pass ? `WIFI:T:WPA;S:${esc(ssid)};P:${esc(pass)};;` : `WIFI:T:nopass;S:${esc(ssid)};;`;
-  }
-
   /** After a drop: on the TV's Wi-Fi, fall back to home once it is gone; on home, jump to the TV's Wi-Fi if it is there. */
   async function moveToReachableNetwork() {
     if (!net) return false;
@@ -469,22 +478,65 @@
     return false;
   }
 
-  const PROBE_HINT_AFTER_MS = 20000;
+  // ---- Faster-connection checklist ----
+  // Checked every 2 s while the sheet is open, and right away when the user comes
+  // back from the camera / Wi-Fi settings, so each step shows ✓ or ✕ with the reason.
+  const CHECK_EVERY_MS = 2000;
+  const DEFAULT_HINTS = {};
+  let checking = false;
+  let leftPage = false;           // the user went to the camera or settings at least once
+
+  function setCheck(id, state, hint) {
+    const item = document.getElementById(id);
+    const small = item.querySelector("small");
+    if (!(id in DEFAULT_HINTS)) DEFAULT_HINTS[id] = small.textContent;
+    item.dataset.state = state;
+    small.textContent = hint || DEFAULT_HINTS[id];
+  }
+
+  /** What the browser reports it is going out through: "wifi", "cellular", or null if it does not say. */
+  const browserNetworkType = () => (navigator.connection && navigator.connection.type) || null;
+
+  async function runChecks() {
+    if (checking || !net || !fastEl.classList.contains("open")) return;
+    checking = true;
+    try {
+      const type = browserNetworkType();
+      if (type === "cellular") setCheck("chkData", "fail", "The browser is still using mobile data. Turn it off in quick settings.");
+      else if (type === "wifi") setCheck("chkData", "ok", "The browser is using Wi-Fi.");
+      else setCheck("chkData", "pending");    // this browser does not tell; the Wi-Fi check below still works
+
+      if (await reachable(net.direct)) {
+        setCheck("chkData", "ok", "The browser is using Wi-Fi.");
+        setCheck("chkWifi", "ok", `Connected to "${net.ssid}".`);
+        setCheck("chkMove", "busy", "Switching…");
+        stopProbe();
+        setTimeout(() => moveTo(net.direct), 600);
+      } else if (leftPage) {
+        setCheck("chkWifi", "fail", type === "cellular"
+          ? "The TV can't be reached while the browser uses mobile data (step 1)."
+          : `Not on "${net.ssid}" yet, or the phone switched back to your home Wi-Fi. Join it again and choose "Keep connection".`);
+      }
+    } finally {
+      checking = false;
+    }
+  }
 
   function startProbe() {
     stopProbe();
-    const started = Date.now();
-    probeTimer = setInterval(async () => {
-      if (net && !onDirect() && await reachable(net.direct)) { stopProbe(); moveTo(net.direct); return; }
-      // Usually the browser is still going out over mobile data, which cannot reach the TV's Wi-Fi.
-      if (Date.now() - started > PROBE_HINT_AFTER_MS) {
-        document.getElementById("fastStatus").textContent =
-          `Still can't reach the TV over its Wi-Fi. Check that mobile data is off and that the phone is connected to "${net ? net.ssid : "the TV's Wi-Fi"}", then tap the button below.`;
-      }
-    }, 1500);
+    leftPage = false;
+    ["chkData", "chkWifi", "chkMove"].forEach((id) => setCheck(id, "pending"));
+    runChecks();
+    probeTimer = setInterval(runChecks, CHECK_EVERY_MS);
   }
 
   function stopProbe() { clearInterval(probeTimer); probeTimer = null; }
+
+  document.addEventListener("visibilitychange", () => {
+    if (!fastEl.classList.contains("open")) return;
+    if (document.hidden) leftPage = true; else runChecks();
+  });
+  if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener("change", runChecks);
 
   function send(msg) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(msg); }
 
@@ -758,9 +810,6 @@
     releaseAll();
     document.getElementById("fastSsid").textContent = net.ssid || "";
     document.getElementById("fastPass").value = net.pass || "";
-    document.getElementById("fastStatus").textContent = "Waiting for the phone to join the TV's Wi-Fi…";
-    document.getElementById("fastOpen").href = controllerUrl(net.direct);   // manual way in if detection does not fire
-    document.getElementById("fastJoin").href = wifiJoinPayload(net.ssid, net.pass);
     fastEl.classList.add("open");
     send("f:1");                                    // the TV shows its Wi-Fi QR and the steps
     if (screen === "game" && !menuPausing) { send("m:1"); menuPausing = true; }
