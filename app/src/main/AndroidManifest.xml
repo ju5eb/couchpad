@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Low-latency Wi-Fi lock: keeps the TV's radio out of power save while playing. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The TV's own Wi-Fi for controllers (local-only hotspot, Android 13+). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
 
     <uses-feature
         android:name="android.software.leanback"

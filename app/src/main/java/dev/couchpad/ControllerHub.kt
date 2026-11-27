@@ -1,10 +1,12 @@
 package dev.couchpad
 
 import android.content.Context
+import android.os.Build
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.ControllerProtocol
 import dev.couchpad.domain.PlayerSlots
 import dev.couchpad.domain.RomLibrary
+import dev.couchpad.network.TvHotspot
 import dev.couchpad.server.ControllerServer
 import java.io.File
 import java.security.SecureRandom
@@ -23,6 +25,17 @@ class ControllerHub(context: Context) {
         fun onReturnToLobby() = Unit
         fun onResetGame() = Unit
         fun onPauseChanged(paused: Boolean) = Unit
+        /** Called on the main thread when the TV's own Wi-Fi network changes state. */
+        fun onDirectNetworkChanged(state: TvHotspot.State) = Unit
+    }
+
+    /** The TV's own Wi-Fi for controllers; lives as long as the app so its password stays stable. */
+    val directNetwork = TvHotspot(context)
+
+    /** Starts the TV's Wi-Fi once (Android 13+); safe to call again. */
+    fun startDirectNetwork() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        directNetwork.start { state -> listener?.onDirectNetworkChanged(state) }
     }
 
     private val prefs = context.getSharedPreferences("couchpad", Context.MODE_PRIVATE)

@@ -1,11 +1,14 @@
 package dev.couchpad.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.KeyEvent
@@ -18,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import dev.couchpad.ControllerHub
 import dev.couchpad.boxart.BoxArtStore
@@ -25,6 +29,7 @@ import dev.couchpad.CouchpadApp
 import dev.couchpad.domain.ControllerButton
 import dev.couchpad.domain.ControllerEvent
 import dev.couchpad.domain.GridNavigator
+import dev.couchpad.network.TvHotspot
 import dev.couchpad.server.LocalAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -46,6 +51,8 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
     private var selected = 0
     private val navigator = GridNavigator(COLUMNS)
     private val boxArt by lazy { BoxArtStore(File(filesDir, "boxart")) }
+    private lateinit var joinPanel: LinearLayout
+    private var askedForWifiPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +67,8 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
         hub.setInGame(false)
         refreshGames()
         refreshPlayers()
+        renderJoinPanel(hub.directNetwork.state)
+        startDirectNetwork()
     }
 
     override fun onPause() {
@@ -220,24 +229,14 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
     // ---- Layout ------------------------------------------------------------
 
     private fun buildLayout(): View {
-        val url = LocalAddress.find()?.let { "http://$it:${ControllerHub.PORT}/?t=${hub.token}" }
+        joinPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        renderJoinPanel(hub.directNetwork.state)
 
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(text("COUCHPAD", 22f, ACCENT, bold = true).apply { letterSpacing = 0.3f })
             addView(View(context), LinearLayout.LayoutParams(1, 20.dp))
-            if (url != null) {
-                addView(FrameLayout(context).apply {
-                    background = GradientDrawable().apply { cornerRadius = 18.dp.toFloat(); setColor(Color.WHITE) }
-                    setPadding(12.dp, 12.dp, 12.dp, 12.dp)
-                    addView(ImageView(context).apply { setImageBitmap(QrCode.render(url, 360)) },
-                        FrameLayout.LayoutParams(176.dp, 176.dp))
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                addView(text("Scan to join", 16f, Color.WHITE, bold = true).apply { setPadding(0, 12.dp, 0, 0) })
-                addView(text(url, 11f, MUTED))
-            } else {
-                addView(text("No network.\nConnect the TV to Wi-Fi.", 16f, Color.WHITE))
-            }
+            addView(joinPanel)
             addView(View(context), LinearLayout.LayoutParams(1, 24.dp))
             addView(sectionTitle("PLAYERS"))
             (1..ControllerHub.MAX_PLAYERS).forEach { player ->
@@ -269,6 +268,74 @@ class LobbyActivity : ComponentActivity(), ControllerHub.Listener {
             addView(left, LinearLayout.LayoutParams(250.dp, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { leftMargin = 32.dp })
         }
+    }
+
+    // ---- Joining ----------------------------------------------------------
+
+    /**
+     * With the TV's own Wi-Fi up: two QRs, join that network then open the
+     * controller. Otherwise: the single home-network QR as before.
+     */
+    private fun renderJoinPanel(state: TvHotspot.State) {
+        joinPanel.removeAllViews()
+        val hotspotAddress = (state as? TvHotspot.State.On)?.info?.address
+        val homeUrl = LocalAddress.find(exclude = setOfNotNull(hotspotAddress))?.let(::controllerUrl)
+        if (state is TvHotspot.State.On) {
+            val info = state.info
+            joinPanel.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(qrStep("1 · Join TV Wi-Fi", info.joinQr), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = 12.dp })
+                addView(qrStep("2 · Open controller", controllerUrl(info.address)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            })
+            joinPanel.addView(text("Wi-Fi  ${info.ssid}", 13f, Color.WHITE, bold = true).apply { setPadding(0, 12.dp, 0, 0) })
+            info.password?.let { joinPanel.addView(text("Password  $it", 13f, Color.WHITE)) }
+            homeUrl?.let { joinPanel.addView(text("On home Wi-Fi instead: $it", 10f, MUTED).apply { setPadding(0, 6.dp, 0, 0) }) }
+            return
+        }
+        if (homeUrl == null) {
+            joinPanel.addView(text("No network.\nConnect the TV to Wi-Fi.", 16f, Color.WHITE))
+            return
+        }
+        joinPanel.addView(qrCard(homeUrl, 176), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        joinPanel.addView(text("Scan to join", 16f, Color.WHITE, bold = true).apply { setPadding(0, 12.dp, 0, 0) })
+        joinPanel.addView(text(homeUrl, 11f, MUTED))
+        val note = when (state) {
+            TvHotspot.State.Starting -> "Starting the TV's own Wi-Fi…"
+            is TvHotspot.State.Failed -> "TV Wi-Fi unavailable: ${state.reason}"
+            else -> null
+        }
+        note?.let { joinPanel.addView(text(it, 11f, MUTED).apply { setPadding(0, 6.dp, 0, 0) }) }
+    }
+
+    private fun qrStep(caption: String, content: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(qrCard(content, 102))
+        addView(text(caption, 12f, Color.WHITE, bold = true).apply { setPadding(0, 8.dp, 0, 0) })
+    }
+
+    private fun qrCard(content: String, sizeDp: Int) = FrameLayout(this).apply {
+        background = GradientDrawable().apply { cornerRadius = 14.dp.toFloat(); setColor(Color.WHITE) }
+        setPadding(8.dp, 8.dp, 8.dp, 8.dp)
+        addView(ImageView(context).apply { setImageBitmap(QrCode.render(content, sizeDp.dp)) }, FrameLayout.LayoutParams(sizeDp.dp, sizeDp.dp))
+    }
+
+    private fun controllerUrl(host: String) = "http://$host:${ControllerHub.PORT}/?t=${hub.token}"
+
+    override fun onDirectNetworkChanged(state: TvHotspot.State) = renderJoinPanel(state)
+
+    /** The TV's Wi-Fi needs the "nearby Wi-Fi devices" permission on Android 13+. */
+    private fun startDirectNetwork() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED) {
+            hub.startDirectNetwork()
+        } else if (!askedForWifiPermission) {
+            askedForWifiPermission = true   // ask once per screen; declining keeps the home-network QR
+            wifiPermission.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+    }
+
+    private val wifiPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) hub.startDirectNetwork()
     }
 
     private fun sectionTitle(value: String) = text(value, 12f, MUTED, bold = true).apply {
